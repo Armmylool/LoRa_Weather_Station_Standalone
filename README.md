@@ -1,0 +1,2 @@
+# LoRa_Weather_Station_Standalone
+Underdevelopment
