@@ -1,7 +1,6 @@
 #include "RS485Sensor.h"
 
 
-
 uint16_t dataProcess::getMedian(uint16_t val1, uint16_t val2, uint16_t val3) {
 	uint16_t middle ;
 	if ((val1 <= val2) && (val1 <= val3)) {
@@ -14,11 +13,11 @@ uint16_t dataProcess::getMedian(uint16_t val1, uint16_t val2, uint16_t val3) {
   return middle;
 }
 
-void sensor::begin(Stream* serialPort) {
+void RS485sensor::begin(Stream* serialPort) {
   _serial = serialPort; 
 }
 
-bool sensor::read (uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t length, Stream* serialPort) {
+bool RS485sensor::read (uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t length, Stream* serialPort) {
 	uint8_t startAttempt = 0 ; /* Read Attempt Flags */
 	uint8_t retry_FLAGS = 0 ;	/* Retry Flags*/
 	uint8_t result;
@@ -65,16 +64,17 @@ bool sensor::read (uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16
 		currentWeather.PM_2_5            = postProcessing.getMedian(rawBuffer[0][7], rawBuffer[1][7], rawBuffer[2][7]);
 		currentWeather.PM_10             = postProcessing.getMedian(rawBuffer[0][8], rawBuffer[1][8], rawBuffer[2][8]);
 		currentWeather.pressure          = postProcessing.getMedian(rawBuffer[0][9], rawBuffer[1][9], rawBuffer[2][9]);
-		currentWeather.illuminace_High   = postProcessing.getMedian(rawBuffer[0][10], rawBuffer[1][10], rawBuffer[2][10]);
-		currentWeather.illuminace_Low    = postProcessing.getMedian(rawBuffer[0][11], rawBuffer[1][11], rawBuffer[2][11]);
+		uint16_t luxHigh   = postProcessing.getMedian(rawBuffer[0][10], rawBuffer[1][10], rawBuffer[2][10]);
+		uint16_t luxLow    = postProcessing.getMedian(rawBuffer[0][11], rawBuffer[1][11], rawBuffer[2][11]);
 		currentWeather.rainfall    = postProcessing.getMedian(rawBuffer[0][13], rawBuffer[1][13], rawBuffer[2][13]);
 		currentWeather.solar_irradiance    = postProcessing.getMedian(rawBuffer[0][15], rawBuffer[1][15], rawBuffer[2][15]);
+		currentWeather.illuminance = ((uint32_t)luxHigh << 16) | luxLow ;
 		return true ;
 	}
 	return false ;
 }
 
-bool sensor::write(uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t value, Stream* serialPort) {
+bool RS485sensor::write(uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t value, Stream* serialPort) {
 	uint8_t startAttempt = 0 ; /* Read Attempt Flags */
 	uint8_t retry_FLAGS = 0 ;	/* Retry Flags*/
 	uint8_t result ;
@@ -92,4 +92,37 @@ bool sensor::write(uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16
 		}
 	}
 	return false ;
+}
+
+bool timeSensor::init_timeSet() {
+	if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    return false ;
+  }
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+	return true ;
+}
+
+bool timeSensor::getTime(timeStruct *val) {
+	if (val == nullptr) {	/* Safety protect when ptr is point to space. */
+		return false ;
+	}
+	
+	DateTime now = rtc.now() ;	/* Read a RTC time */
+	/* Insert to a struct with pointer */
+	val -> date = now.day() ; 
+	val -> month = now.month() ;
+	val -> year = now.year() ;
+	val -> hour = now.hour() ;
+	val -> minute = now.minute() ;
+	val -> second = now.second() ;
+	snprintf(val->dateStr, sizeof(val->dateStr), "%02d/%02d/%04d\t", val->date, val->month, val->year);
+	snprintf(val->timeStr, sizeof(val->timeStr), "%02d:%02d:%02d", val->hour, val->minute, val->second);
+	Serial.print(time.dateStr) ;
+	Serial.println(time.timeStr) ;
+	delay(50) ;
+	return true ;
 }

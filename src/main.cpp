@@ -1,83 +1,141 @@
 #include "SDCard.h"
 #include "RS485Sensor.h"
-#include "utilities.h"
+
+typedef enum {
+  STATE_IDLE ,
+  STATE_TIME ,
+  STATE_SOIL ,
+  STATE_WEATHER , 
+  STATE_SAVEMEMORY ,
+  STATE_UARTTRANSMIT ,
+  STATE_UARTRESPOND , 
+} systemState ;
 
 /* Declare Function */
-SDCard Card ;
-sensor RS485Sensor ;
+SDCard Card ; /* SDCard utilized */
+RS485sensor modbusSensor ;   /* RS485 Sensor utilized */
+timeSensor RTC ;  /* RTC Module utilized */
+systemState currentState = STATE_IDLE ;
+
+/* Declare Function */
+void checkFile(const char* fileName) ;
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200) ;
   Serial2.begin(9600, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN) ;
-  RS485Sensor.begin(&Serial2) ;
-  // if (!Card.init(CS_PIN)) {
-  //   while (1);
-  // }
-  // Serial.println("SD Card initialized.");
-  // if (!SD.exists("/data.csv")) {
-  //   Serial.println("File doesn't exist. Creating new file...");
-  //   Card.write(SD, "/data.csv", "Time,Value\r\n"); 
-  // } else {
-  //   Serial.println("File already exists. Ready to append.");
-  // }
+  Wire.begin() ;
 
-  // String dataMessage = String(millis()) + "," + String(analogRead(34)) + "\r\n";
-  // Card.append(SD, "/data.csv", dataMessage.c_str());
-  // delay(1000);
-  Serial.print("INIT") ; 
+  modbusSensor.begin(&Serial2) ;   /* Begin Sensor */
+  if (Card.init(CS_PIN)){   /* Init Sensor */
+    Serial.println("SD Card Init") ; 
+    checkFile(fileSavingName) ;
+  }
+  else {
+    Serial.println("SD Card Fail") ;
+  }
+  if (RTC.init_timeSet()) {   /* Init RTC Module */
+    Serial.println("Init RTC") ;
+  } 
+  else {
+    Serial.println("RTC Init Failed") ;
+  }
+
+  Serial.print("System Ready...") ; 
   delay(100) ;
 }
 
 void loop() {
-  if (RS485Sensor.read(SOIL, 0x01, 0x00, 7, &Serial2)) {
-    Serial.println("Success!");
-    Serial.print("  - Moisture: "); 
-    Serial.println(RS485Sensor.currentSoil.moisture_content);
-    Serial.print("  - Temp: ");
-    Serial.println(RS485Sensor.currentSoil.soil_Temp); 
-    Serial.print("  - EC: ");
-    Serial.println(RS485Sensor.currentSoil.EC);
-    Serial.print("  - PH: "); 
-    Serial.println(RS485Sensor.currentSoil.PH);
-    Serial.print("  - N: ");
-    Serial.println(RS485Sensor.currentSoil.N); 
-    Serial.print("  - P: ");
-    Serial.println(RS485Sensor.currentSoil.P);
-    Serial.print("  - K: ");
-    Serial.println(RS485Sensor.currentSoil.K);
+  switch (currentState) {
+    case STATE_IDLE : 
+      /* Now it is nothing here. */
+      currentState = STATE_TIME ;
+      break ;
+    case STATE_TIME :
+      if (RTC.getTime(&RTC.time)) {
+        currentState = STATE_SOIL ;
+        break ;
+      }
+    case STATE_SOIL :
+      if(modbusSensor.read(SOIL, 0x01, 0x0000, 7, &Serial2)) {
+        if (DEBUG) {
+          Serial.println("Success!");
+          Serial.print("  - Moisture: "); 
+          Serial.println(modbusSensor.currentSoil.moisture_content);
+          Serial.print("  - Temp: ");
+          Serial.println(modbusSensor.currentSoil.soil_Temp); 
+          Serial.print("  - EC: ");
+          Serial.println(modbusSensor.currentSoil.EC);
+          Serial.print("  - PH: "); 
+          Serial.println(modbusSensor.currentSoil.PH);
+          Serial.print("  - N: ");
+          Serial.println(modbusSensor.currentSoil.N); 
+          Serial.print("  - P: ");
+          Serial.println(modbusSensor.currentSoil.P);
+          Serial.print("  - K: ");
+          Serial.println(modbusSensor.currentSoil.K);
+        }
+        delay(100) ;
+        currentState = STATE_WEATHER ;
+        break ;
+      }
+      else {
+        Serial.println("Soil Read Failed") ;
+      }
+    case STATE_WEATHER :
+      if (modbusSensor.read(WEATHER, 0x02, 0x01F4, 16, &Serial2)) {
+        if (DEBUG) {
+          Serial.println("Success!");
+          Serial.print("  - windSpeed: "); 
+          Serial.println(modbusSensor.currentWeather.windSpeed);
+          Serial.print("  - windStrength: ");
+          Serial.println(modbusSensor.currentWeather.windStrength); 
+          Serial.print("  - WindDirection_Num: ");
+          Serial.println(modbusSensor.currentWeather.WindDirection_Num);
+          Serial.print("  - windDirection_Deg: "); 
+          Serial.println(modbusSensor.currentWeather.windDirection_Deg);
+          Serial.print("  - humidity: ");
+          Serial.println(modbusSensor.currentWeather.humidity); 
+          Serial.print("  - temperature: "); 
+          Serial.println(modbusSensor.currentWeather.temperature);
+          Serial.print("  - noise: ");
+          Serial.println(modbusSensor.currentWeather.noise); 
+          Serial.print("  - PM_2_5: "); 
+          Serial.println(modbusSensor.currentWeather.PM_2_5);
+          Serial.print("  - PM_10: ");
+          Serial.println(modbusSensor.currentWeather.PM_10); 
+          Serial.print("  - pressure: "); 
+          Serial.println(modbusSensor.currentWeather.pressure);
+          Serial.print("  - illuminace: ");
+          Serial.println(modbusSensor.currentWeather.illuminance) ; 
+        }
+        delay(100) ;
+        currentState = STATE_SAVEMEMORY ;
+        break ;
+      }
+      else {
+        Serial.println("Weather Read Failed") ;
+      }
+    // case STATE_SAVEMEMORY :
+    //   if (Card.saveDataTOSD(fileSavingName, &RTC.time, &modbusSensor.currentSoil, &modbusSensor.currentWeather)) {
+    //     Serial.println("Save Successfully") ;
+    //     currentState = STATE_IDLE ;
+    //     break ;
+    //   }
+    //   else {
+    //     Serial.print("Save Failed") ;
+    //   }
+    //   currentState = STATE_IDLE; 
+    //   break;
   }
-  delay(100) ;
-  if (RS485Sensor.read(WEATHER, 0x02, 0x01F4, 16, &Serial2)){
-    Serial.println("Success!");
-    Serial.print("  - windSpeed: "); 
-    Serial.println(RS485Sensor.currentWeather.windSpeed);
-    Serial.print("  - windStrength: ");
-    Serial.println(RS485Sensor.currentWeather.windStrength); 
-    Serial.print("  - WindDirection_Num: ");
-    Serial.println(RS485Sensor.currentWeather.WindDirection_Num);
-    Serial.print("  - windDirection_Deg: "); 
-    Serial.println(RS485Sensor.currentWeather.windDirection_Deg);
-    Serial.print("  - humidity: ");
-    Serial.println(RS485Sensor.currentWeather.humidity); 
-    Serial.print("  - temperature: "); 
-    Serial.println(RS485Sensor.currentWeather.temperature);
-    Serial.print("  - noise: ");
-    Serial.println(RS485Sensor.currentWeather.noise); 
-    Serial.print("  - PM_2_5: "); 
-    Serial.println(RS485Sensor.currentWeather.PM_2_5);
-    Serial.print("  - PM_10: ");
-    Serial.println(RS485Sensor.currentWeather.PM_10); 
-    Serial.print("  - pressure: "); 
-    Serial.println(RS485Sensor.currentWeather.pressure);
-    Serial.print("  - illuminace_High: ");
-    Serial.println(RS485Sensor.currentWeather.illuminace_High); 
-    Serial.print("  - illuminace_Low: ");
-    Serial.println(RS485Sensor.currentWeather.illuminace_Low); 
-  }
-  delay(1000) ;
-  if (RS485Sensor.write(WEATHER, 0x02, 0x6002, 0x005A, &Serial2)) {
-    Serial.println("IN Write loop") ;
-  }
-  //Test
 }
 
+void checkFile(const char* fileName) {
+  if(!SD.exists(fileName)) {
+    Serial.println("File doesn't exist. Creating new file") ;
+    Card.write(SD, fileName, "Time,Moisture,soil_temperature,Electrical conductivity,PH,N,P,K,"
+      "windSpeed,windStrength,WindDirection_Num,windDirection_Deg,humidity,temperature,noise,PM_2_5,PM_10,pressure,Illuminance,Rainfall,solar_Irradiance\r\n") ;
+  }
+  else {
+    Serial.println("File already exists. Ready to append.");
+  }
+}
