@@ -52,6 +52,8 @@ class dataProcess {
   public :
     /** @brief Calculate a Median of three values. */
     uint16_t getMedian(uint16_t val1, uint16_t val2, uint16_t val3) ;
+    /** @brief Calculate a Median of three values (32-bit version). */
+    uint32_t getMedian32(uint32_t val1, uint32_t val2, uint32_t val3) ;
     /** @brief Change from 2 bytes to 1 byte */
     uint16_t twobytes_to_onebyte(uint16_t highval, uint16_t lowval) ;
 } ;

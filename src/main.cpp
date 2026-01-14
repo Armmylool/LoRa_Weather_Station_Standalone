@@ -32,7 +32,7 @@ void setup() {
   }
   else {
     Serial.println("SD Card Fail") ;
-    while(1) ;
+    while(1) ; /* This is version of testing. The real product this line will delete. */
   }
   if (RTC.init_timeSet()) {   /* Init RTC Module */
     Serial.println("Init RTC") ;
@@ -55,8 +55,13 @@ void loop() {
     case STATE_TIME :
       if (RTC.getTime(&RTC.time)) {
         currentState = STATE_SOIL ;
-        break ;
       }
+      else {
+        Serial.println("RTC Read Failed");
+        /* Add this condition to do smth. */
+      }
+      break ;
+      /* Check เวลาว่า ขึ้นเดือนใหม่หรือยังถ้าขึ้นแล้วให้ Reset ค่า Rainfall */
     case STATE_SOIL :
       if(modbusSensor.read(SOIL, 0x01, 0x0000, 7, &Serial2)) {
         if (DEBUG) {
@@ -78,11 +83,12 @@ void loop() {
         }
         delay(100) ;
         currentState = STATE_WEATHER ;
-        break ;
       }
       else {
         Serial.println("Soil Read Failed") ;
+        /* Add this condition to do smth. */
       }
+      break ;
     case STATE_WEATHER :
       if (modbusSensor.read(WEATHER, 0x02, 0x01F4, 16, &Serial2)) {
         if (DEBUG) {
@@ -112,16 +118,16 @@ void loop() {
         }
         delay(100) ;
         currentState = STATE_SAVEMEMORY ;
-        break ;
       }
       else {
         Serial.println("Weather Read Failed") ;
+        /* Add this condition to do smth. */
       }
+      break ;
     case STATE_SAVEMEMORY :
       if (Card.saveDataTOSD(fileSavingName, &RTC.time, &modbusSensor.currentSoil, &modbusSensor.currentWeather)) {
         Serial.println("Save Successfully") ;
         currentState = STATE_IDLE ;
-        break ;
       }
       else {
         Serial.print("Save Failed") ;
