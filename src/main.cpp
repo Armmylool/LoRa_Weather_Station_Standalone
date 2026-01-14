@@ -23,6 +23,8 @@ void checkFile(const char* fileName) ;
 void setup() {
   Serial.begin(115200) ;
   Serial2.begin(9600, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN) ;
+
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
   Wire.begin() ;
 
   modbusSensor.begin(&Serial2) ;   /* Begin Sensor */
@@ -49,7 +51,6 @@ void loop() {
   switch (currentState) {
     case STATE_IDLE : 
       /* Now it is nothing here. */
-      delay(10000) ;
       currentState = STATE_TIME ;
       break ;
     case STATE_TIME :
@@ -132,7 +133,15 @@ void loop() {
       else {
         Serial.print("Save Failed") ;
       }
+      Serial.print("Minimum free heap: ");
+      Serial.println(ESP.getMinFreeHeap());
+      Serial.println("GO to sleep") ;
+      Serial.flush() ;
+      esp_deep_sleep_start();
       currentState = STATE_IDLE; 
+      break;
+    default:
+      currentState = STATE_IDLE;
       break;
   }
 }

@@ -9,6 +9,8 @@
 #define Comms Serial1  /* Use as communication talking between two ESP32 */
 #define Log Serial   /* USe as Debugging */
 #define DEBUG true
+#define uS_TO_S_FACTOR 1000000ULL /* second to microseconds. */
+#define TIME_TO_SLEEP  10     /* Sleep Time (seconds) */
 
 const uint8_t CS_PIN = GPIO_NUM_5 ; /* Chip Select Pin */
 const uint8_t RS485_RX_PIN  = 16 ;  /* RS485 RX Pinout */
