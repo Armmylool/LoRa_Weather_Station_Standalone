@@ -21,7 +21,7 @@ bool RS485sensor::read (uint8_t sensorType ,uint8_t slaveID, uint16_t address, u
 	uint8_t startAttempt = 0 ; /* Read Attempt Flags */
 	uint8_t retry_FLAGS = 0 ;	/* Retry Flags*/
 	uint8_t result;
-	uint16_t rawBuffer[readAttempt][12];
+	uint16_t rawBuffer[readAttempt][16];
 
 	modbus.begin(slaveID, *serialPort) ;
 

@@ -32,6 +32,7 @@ void setup() {
   }
   else {
     Serial.println("SD Card Fail") ;
+    while(1) ;
   }
   if (RTC.init_timeSet()) {   /* Init RTC Module */
     Serial.println("Init RTC") ;
@@ -48,6 +49,7 @@ void loop() {
   switch (currentState) {
     case STATE_IDLE : 
       /* Now it is nothing here. */
+      delay(10000) ;
       currentState = STATE_TIME ;
       break ;
     case STATE_TIME :
@@ -115,24 +117,24 @@ void loop() {
       else {
         Serial.println("Weather Read Failed") ;
       }
-    // case STATE_SAVEMEMORY :
-    //   if (Card.saveDataTOSD(fileSavingName, &RTC.time, &modbusSensor.currentSoil, &modbusSensor.currentWeather)) {
-    //     Serial.println("Save Successfully") ;
-    //     currentState = STATE_IDLE ;
-    //     break ;
-    //   }
-    //   else {
-    //     Serial.print("Save Failed") ;
-    //   }
-    //   currentState = STATE_IDLE; 
-    //   break;
+    case STATE_SAVEMEMORY :
+      if (Card.saveDataTOSD(fileSavingName, &RTC.time, &modbusSensor.currentSoil, &modbusSensor.currentWeather)) {
+        Serial.println("Save Successfully") ;
+        currentState = STATE_IDLE ;
+        break ;
+      }
+      else {
+        Serial.print("Save Failed") ;
+      }
+      currentState = STATE_IDLE; 
+      break;
   }
 }
 
 void checkFile(const char* fileName) {
   if(!SD.exists(fileName)) {
     Serial.println("File doesn't exist. Creating new file") ;
-    Card.write(SD, fileName, "Time,Moisture,soil_temperature,Electrical conductivity,PH,N,P,K,"
+    Card.write(SD, fileName, "Date,Time,Moisture,soil_temperature,Electrical conductivity,PH,N,P,K,"
       "windSpeed,windStrength,WindDirection_Num,windDirection_Deg,humidity,temperature,noise,PM_2_5,PM_10,pressure,Illuminance,Rainfall,solar_Irradiance\r\n") ;
   }
   else {
