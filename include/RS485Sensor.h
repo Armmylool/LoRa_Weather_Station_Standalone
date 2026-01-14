@@ -32,6 +32,8 @@ typedef struct {
   uint16_t pressure = 0 ;
   uint16_t illuminace_High = 0 ;
   uint16_t illuminace_Low = 0 ;
+  uint16_t rainfall = 0 ;
+  uint16_t solar_irradiance = 0 ;
 } weatherData ;
 
 class dataProcess {
@@ -47,7 +49,9 @@ class sensor {
       /** @brief Send the Serial2 in this class. */
       void begin(Stream* serialPort);
       /** @brief Read a data with Modbus RS485 Protocol */
-      bool read(uint8_t sensorType ,uint16_t address, uint16_t length, Stream* serialPort) ;
+      bool read(uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t length, Stream* serialPort) ;
+      /** @brief Write the register in order to setting the RS485 Sensor. */
+      bool write (uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t value, Stream* serialPort) ;
     private :
       ModbusMaster modbus;
       dataProcess postProcessing;

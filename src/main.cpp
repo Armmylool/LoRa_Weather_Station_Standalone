@@ -29,7 +29,7 @@ void setup() {
 }
 
 void loop() {
-  if (RS485Sensor.read(SOIL, 0x01, 7, &Serial2)) {
+  if (RS485Sensor.read(SOIL, 0x01, 0x00, 7, &Serial2)) {
     Serial.println("Success!");
     Serial.print("  - Moisture: "); 
     Serial.println(RS485Sensor.currentSoil.moisture_content);
@@ -46,6 +46,38 @@ void loop() {
     Serial.print("  - K: ");
     Serial.println(RS485Sensor.currentSoil.K);
   }
+  delay(100) ;
+  if (RS485Sensor.read(WEATHER, 0x02, 0x01F4, 16, &Serial2)){
+    Serial.println("Success!");
+    Serial.print("  - windSpeed: "); 
+    Serial.println(RS485Sensor.currentWeather.windSpeed);
+    Serial.print("  - windStrength: ");
+    Serial.println(RS485Sensor.currentWeather.windStrength); 
+    Serial.print("  - WindDirection_Num: ");
+    Serial.println(RS485Sensor.currentWeather.WindDirection_Num);
+    Serial.print("  - windDirection_Deg: "); 
+    Serial.println(RS485Sensor.currentWeather.windDirection_Deg);
+    Serial.print("  - humidity: ");
+    Serial.println(RS485Sensor.currentWeather.humidity); 
+    Serial.print("  - temperature: "); 
+    Serial.println(RS485Sensor.currentWeather.temperature);
+    Serial.print("  - noise: ");
+    Serial.println(RS485Sensor.currentWeather.noise); 
+    Serial.print("  - PM_2_5: "); 
+    Serial.println(RS485Sensor.currentWeather.PM_2_5);
+    Serial.print("  - PM_10: ");
+    Serial.println(RS485Sensor.currentWeather.PM_10); 
+    Serial.print("  - pressure: "); 
+    Serial.println(RS485Sensor.currentWeather.pressure);
+    Serial.print("  - illuminace_High: ");
+    Serial.println(RS485Sensor.currentWeather.illuminace_High); 
+    Serial.print("  - illuminace_Low: ");
+    Serial.println(RS485Sensor.currentWeather.illuminace_Low); 
+  }
   delay(1000) ;
+  if (RS485Sensor.write(WEATHER, 0x02, 0x6002, 0x005A, &Serial2)) {
+    Serial.println("IN Write loop") ;
+  }
+  //Test
 }
 

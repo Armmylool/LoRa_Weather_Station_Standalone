@@ -18,13 +18,13 @@ void sensor::begin(Stream* serialPort) {
   _serial = serialPort; 
 }
 
-bool sensor::read (uint8_t sensorType ,uint16_t address, uint16_t length, Stream* serialPort) {
+bool sensor::read (uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t length, Stream* serialPort) {
 	uint8_t startAttempt = 0 ; /* Read Attempt Flags */
 	uint8_t retry_FLAGS = 0 ;	/* Retry Flags*/
 	uint8_t result;
 	uint16_t rawBuffer[readAttempt][12];
 
-	modbus.begin(address, *serialPort) ;
+	modbus.begin(slaveID, *serialPort) ;
 
 	while (startAttempt < readAttempt && retry_FLAGS < maxRetry) {
 		result = modbus.readHoldingRegisters(address, length) ;
@@ -54,7 +54,7 @@ bool sensor::read (uint8_t sensorType ,uint16_t address, uint16_t length, Stream
 		return true;
 	}
 	else if (sensorType == WEATHER) {
-		memset(&currentWeather, 0, sizeof(weatherData)); // เคลียร์ค่าเก่า
+		memset(&currentWeather, 0, sizeof(weatherData)); /* Set the all of struct to zero First.*/
 		currentWeather.windSpeed         = postProcessing.getMedian(rawBuffer[0][0], rawBuffer[1][0], rawBuffer[2][0]);
 		currentWeather.windStrength      = postProcessing.getMedian(rawBuffer[0][1], rawBuffer[1][1], rawBuffer[2][1]);
 		currentWeather.WindDirection_Num = postProcessing.getMedian(rawBuffer[0][2], rawBuffer[1][2], rawBuffer[2][2]);
@@ -67,7 +67,29 @@ bool sensor::read (uint8_t sensorType ,uint16_t address, uint16_t length, Stream
 		currentWeather.pressure          = postProcessing.getMedian(rawBuffer[0][9], rawBuffer[1][9], rawBuffer[2][9]);
 		currentWeather.illuminace_High   = postProcessing.getMedian(rawBuffer[0][10], rawBuffer[1][10], rawBuffer[2][10]);
 		currentWeather.illuminace_Low    = postProcessing.getMedian(rawBuffer[0][11], rawBuffer[1][11], rawBuffer[2][11]);
+		currentWeather.rainfall    = postProcessing.getMedian(rawBuffer[0][13], rawBuffer[1][13], rawBuffer[2][13]);
+		currentWeather.solar_irradiance    = postProcessing.getMedian(rawBuffer[0][15], rawBuffer[1][15], rawBuffer[2][15]);
 		return true ;
+	}
+	return false ;
+}
+
+bool sensor::write(uint8_t sensorType ,uint8_t slaveID, uint16_t address, uint16_t value, Stream* serialPort) {
+	uint8_t startAttempt = 0 ; /* Read Attempt Flags */
+	uint8_t retry_FLAGS = 0 ;	/* Retry Flags*/
+	uint8_t result ;
+	modbus.begin(slaveID, *serialPort) ;
+
+	while (retry_FLAGS < maxRetry) {		/* Write the register with retry five times if can not write */
+		result = modbus.writeSingleRegister(address, value) ;
+		if (result == modbus.ku8MBSuccess) {
+			Serial.println("Write Success") ;
+			return true ;
+		}
+		else {
+			retry_FLAGS++;
+			delay(50) ;
+		}
 	}
 	return false ;
 }

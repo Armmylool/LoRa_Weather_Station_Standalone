@@ -15,6 +15,6 @@ const uint8_t RS485_TX_PIN = 17 ;   /* RS485 TX Pinout */
 // const int DATA_RX_PIN = ค่าอื่น เช่น 13 ;    /* Data RX Pinout */
 // const int DATA_TX_PIN = ค่าอื่น เช่น 14 ;    /* DATA TX Pinout */
 const uint8_t readAttempt = 3 ; /* Reading Attempt 0, 1, 2 readAttempt is 3. */
-const uint8_t maxRetry = 10 ; /* Maximum Retry when reading all sensor error.*/
+const uint8_t maxRetry = 5 ; /* Maximum Retry when reading all sensor error.*/
 
 #endif
