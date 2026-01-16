@@ -35,6 +35,7 @@ void setup() {
   else {
     Serial.println("SD Card Fail") ;
     Serial.println("System will retry on next wake cycle") ;
+    Serial.flush();
     esp_deep_sleep_start(); /* Go to sleep and retry on next wake */
   }
   if (RTC.init_timeSet()) {   /* Init RTC Module */
