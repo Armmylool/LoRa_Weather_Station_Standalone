@@ -34,7 +34,8 @@ void setup() {
   }
   else {
     Serial.println("SD Card Fail") ;
-    while(1) ; /* This is version of testing. The real product this line will delete. */
+    Serial.println("System will retry on next wake cycle") ;
+    esp_deep_sleep_start(); /* Go to sleep and retry on next wake */
   }
   if (RTC.init_timeSet()) {   /* Init RTC Module */
     Serial.println("Init RTC") ;
@@ -59,7 +60,9 @@ void loop() {
       }
       else {
         Serial.println("RTC Read Failed");
-        /* Add this condition to do smth. */
+        Serial.println("Going to sleep and will retry");
+        Serial.flush();
+        esp_deep_sleep_start();
       }
       break ;
       /* Check เวลาว่า ขึ้นเดือนใหม่หรือยังถ้าขึ้นแล้วให้ Reset ค่า Rainfall */
@@ -87,7 +90,9 @@ void loop() {
       }
       else {
         Serial.println("Soil Read Failed") ;
-        /* Add this condition to do smth. */
+        Serial.println("Going to sleep and will retry");
+        Serial.flush();
+        esp_deep_sleep_start();
       }
       break ;
     case STATE_WEATHER :
@@ -122,7 +127,9 @@ void loop() {
       }
       else {
         Serial.println("Weather Read Failed") ;
-        /* Add this condition to do smth. */
+        Serial.println("Going to sleep and will retry");
+        Serial.flush();
+        esp_deep_sleep_start();
       }
       break ;
     case STATE_SAVEMEMORY :
@@ -138,7 +145,6 @@ void loop() {
       Serial.println("GO to sleep") ;
       Serial.flush() ;
       esp_deep_sleep_start();
-      currentState = STATE_IDLE; 
       break;
     default:
       currentState = STATE_IDLE;
