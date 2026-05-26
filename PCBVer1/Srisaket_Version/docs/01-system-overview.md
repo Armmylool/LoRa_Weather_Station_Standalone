@@ -1,415 +1,553 @@
-# 1. System Overview
+# Module 1 -- System Overview
 
 **All-in-One Weather Station -- Srisaket Version**
-Firmware v2.3.5 | Build 18-05-2026 | IDEA Laboratory @ KMUTT
+Firmware v2.3.5 | Build 18-05-2026
+IDEA Laboratory @ KMUTT
 
 ---
 
-## 1.1 Project Introduction
+## 1. Project Introduction
 
-The All-in-One Weather Station is a battery-powered, duty-cycled environmental
-monitoring platform built around the ESP32-C3 (Seeed XIAO) microcontroller. It
-is designed for unattended deployment in agricultural and meteorological field
-stations.
+The Srisaket Weather Station is a battery-powered, duty-cycled environmental
+monitoring device built around the Seeed XIAO ESP32-C3 module.  It is designed
+for unattended field deployment: the device wakes on a hardware timer, reads
+local sensors, uploads data over GSM/GPRS, and powers itself back down -- all
+within a single duty cycle typically lasting 3--5 minutes.
 
-The firmware implements a run-once-per-wake-cycle state machine governed by the
-TPL5110 nanotimer, which supplies power at a configurable interval set by an
-external resistor. On each wake, the station:
+### 1.1 Primary Functions
 
-1. Opens a WiFi access point and simultaneously scans for / reconnects to a BLE
-   sensor device (the "Sniffer Portal") to collect auxiliary microclimate data.
-2. Initializes the SIM800 GSM/GPRS modem, connects to the cellular network, and
-   publishes a heartbeat over MQTT.
-3. Synchronises the real-time clock via GSM RTC or NTP.
-4. Reads a 9-in-1 weather station sensor (wind speed/direction, air temperature
-   /humidity, CO2, barometric pressure, illuminance, rainfall, solar radiation)
-   over Modbus RS-485 (slave address 0x01).
-5. Reads a 7-in-1 soil sensor (moisture, temperature, EC, pH, N, P, K) over
-   the same RS-485 bus (slave address 0x03).
-6. Persists readings to daily CSV files on LittleFS and pushes them to InfluxDB
-   v2 over the GSM data link.
-7. Pulses the TPL5110 DONE pin so the nanotimer cuts power until the next cycle.
+| Function | Description |
+|---|---|
+| **Soil sensing** | 7-in-1 RS-485 soil sensor (humidity, temperature, EC, pH, N, P, K) |
+| **Weather sensing** | 9-in-1 RS-485 weather station (wind speed/direction, air temp/humidity, CO2, pressure, illuminance, rainfall, solar irradiance) |
+| **BLE gateway** | Nordic UART Service (NUS) client for Sniffer Portal BLE sensor devices |
+| **Data upload** | MQTT publish and InfluxDB v2 line-protocol write over GSM/GPRS (SIM800) |
+| **Local storage** | LittleFS CSV files with automatic rollover at configurable thresholds |
+| **Configuration portal** | WiFi AP web server with authentication, live data view, BLE scan/connect, and OTA controls |
+| **Remote firmware update** | OTA over GSM via custom HTTP server; also supports ArduinoOTA over WiFi AP |
+| **Email alerts** | SMTP email for login-failure alarms and periodic status reports (via SIM800 AT commands) |
 
-Communication channels:
+### 1.2 Key Specifications
 
-| Channel   | Protocol     | Purpose                                       |
-|-----------|-------------|-----------------------------------------------|
-| UART1     | Modbus RTU   | RS-485 soil and weather sensors               |
-| UART0     | AT commands  | SIM800 GSM/GPRS (MQTT, NTP, SMTP, OTA)       |
-| BLE 2.4 GHz | NimBLE    | Sniffer Portal via Nordic UART Service (NUS)  |
-| WiFi AP   | HTTP         | Web configuration portal (channel 1)          |
-| LittleFS  | CSV          | Local data buffering and storage rollover     |
-| ADC A0    | Voltage divider | Battery voltage monitoring                 |
+| Parameter | Value | Source |
+|---|---|---|
+| MCU | ESP32-C3 (RISC-V, single-core, 160 MHz) | `platformio.ini` |
+| Flash | 4 MB, partitioned: 2 x 1.625 MB OTA + 720 KB LittleFS | `partitions_ota_4mb.csv` |
+| Firmware version | 2.3.5 | `utilities.h` |
+| Build date | 18-05-2026 | `utilities.h` |
+| Framework | Arduino (PlatformIO) | `platformio.ini` |
+| BLE stack | NimBLE (`CONFIG_BT_NIMBLE_ENABLED=1`) | `platformio.ini` |
+| Debug level | 0 (none) | `platformio.ini` `CORE_DEBUG_LEVEL=0` |
+| Watchdog timeout | 45 seconds | `WDT_TIMEOUT_SEC` in `utilities.h` |
+| Serial debug baud | 115200 | `SERIAL_BAUDRATE` in `utilities.h` |
 
-The PlatformIO project targets the `seeed_xiao_esp32c3` board under the Arduino
-framework with a 4 MB OTA partition scheme.
+### 1.3 External Libraries
 
----
-
-## 1.2 Architecture Block Diagram
-
-```
-+-------------------------------------------------------------+
-|                    ESP32-C3 (Seeed XIAO)                     |
-|                                                              |
-|  +----------+  UART1 (9600)  +------------------+           |
-|  | RS-485   |<-------------->| Soil Sensor 0x03 |           |
-|  | Transceiver               | Weather Stn 0x01 |           |
-|  +----------+                +------------------+           |
-|                                                              |
-|  +----------+  UART0 (9600)  +------------------+           |
-|  | SIM800   |<-------------->| GSM/GPRS Modem   |           |
-|  | GSM      |                | (MQTT/NTP/SMTP/  |           |
-|  +----------+                |  OTA/InfluxDB)   |           |
-|                               +------------------+           |
-|  +----------+                                               |
-|  | NimBLE   |  BLE 2.4 GHz  +------------------+           |
-|  | Client   |<-------------->| Sniffer Portal   |           |
-|  +----------+                | (NUS/GATT)       |           |
-|                               +------------------+           |
-|  +----------+                                               |
-|  | WiFi AP  |  802.11 Ch1    +------------------+           |
-|  | Server   |<-------------->| Web Browser      |           |
-|  +----------+                | (Config/Live)    |           |
-|                               +------------------+           |
-|  +----------+  +----------+  +----------+                   |
-|  | LittleFS |  | NVS Prefs|  | ADC A0   |                   |
-|  | (CSV)    |  | (Config) |  | (Battery)|                   |
-|  +----------+  +----------+  +----------+                   |
-|                                                              |
-|  TPL5110 --> DONE Pin (D2) --> Power Cut                    |
-+-------------------------------------------------------------+
-```
-
-### Pin Assignment
-
-| Function         | GPIO  | Direction | Notes                          |
-|------------------|-------|-----------|--------------------------------|
-| RS-485 RX        | D4    | Input     | UART1, 9600 baud, 8N1         |
-| RS-485 TX        | D10   | Output    | UART1, 9600 baud, 8N1         |
-| GSM RX           | D7    | Input     | UART0, 9600 baud, 8N1         |
-| GSM TX           | D6    | Output    | UART0, 9600 baud, 8N1         |
-| TPL5110 DONE     | D2    | Output    | Active-HIGH pulse to cut power |
-| Battery ADC      | A0    | Input     | Voltage divider (100k/100k)    |
-| USB CDC Serial   | USB   | --        | Debug console, 115200 baud     |
+| Library | Version | Purpose |
+|---|---|---|
+| `4-20ma/ModbusMaster` | ^2.0.1 | Modbus RTU master for RS-485 sensor reads |
+| `knolleary/PubSubClient` | ^2.8 | MQTT client (used over TinyGsmClient) |
+| `vshymanskyy/TinyGSM` | ^0.12.0 | SIM800 GSM modem abstraction |
+| `h2zero/NimBLE-Arduino` | ^1.4.2 | BLE 5.0 client (scan, GATT, NUS) |
 
 ---
 
-## 1.3 State Machine Flow
-
-The firmware implements a linear state machine. On each power cycle the ESP32
-enters `STATE_WIFI_AP` and advances through each state in sequence. Every state
-has a maximum timeout; on expiry the machine falls through to the next state so
-the cycle always completes.
+## 2. Architecture Block Diagram
 
 ```
-STATE_WIFI_AP (5 min max, 1 min min)
-  | Exits when: BLE data received after min window / AP idle timeout / OTA requested
-  v
-STATE_GSM_INIT (120 s)
-  | Initializes SIM800 modem, registers on cellular network, opens GPRS session.
-  | Publishes heartbeat (MQTT pong) with battery voltage, free heap, uptime,
-  | GSM signal strength, and firmware version.
-  | On failure: sets gsmAvailable = false and skips to STATE_NTP.
-  v
-STATE_NTP (30 s)
-  | Attempts GSM RTC time first; falls back to NTP (pool.ntp.org).
-  | If both fail: reads last timestamp from the previous daily CSV and adds
-  | 10 minutes.  Creates/rotates the daily CSV file name.
-  | Triggers remote OTA check if configured.
-  v
-STATE_WEATHER (30 s total, 15 s settle)
-  | Waits 15 s for the RS-485 transceiver to settle after any preceding
-  | activity, then reads 16 holding registers from slave 0x01 (address 0x01F4).
-  | Uses median-of-3 filtering across up to 3 read attempts per sample.
-  | On failure: zeroes weather fields and continues.
-  v
-STATE_SOIL (30 s total, 15 s settle)
-  | Waits 15 s settle, then reads 7 holding registers from slave 0x03
-  | (address 0x0000).  Same median filtering as weather.
-  | On persistent failure (3 consecutive misses): zeroes soil fields.
-  v
-STATE_SAVE (10 s)
-  | Checks LittleFS usage against configurable rollover threshold (default 80%).
-  | If over threshold: rebuilds the CSV preserving only the most recent row.
-  | Appends the current sensor record to the daily CSV.
-  | Sends InfluxDB v2 line-protocol POST (appends sniffer data if BLE active).
-  v
-STATE_RECONNECT (120 s timeout, exits immediately)
-  | Placeholder for buffered-data re-publish; currently transitions directly
-  | to STATE_FINISH.
-  v
-STATE_FINISH
-  | 3 s delay, flushes Serial.
-  | DONE pin: LOW for 50 ms, then HIGH for 2 s.
-  | If TPL5110 does not cut power: enters infinite loop feeding WDT every 1 s.
+                        +-----------------------------------------+
+                        |          ESP32-C3 (XIAO)                |
+                        |         160 MHz / 4 MB Flash            |
+                        |                                         |
+  Battery (3.7 V) ---->| A0 (ADC)    Battery voltage divider     |
+                        |   R1 = 100k, R2 = 100k                 |
+                        |                                         |
+                        | D2 (GPIO) --------------------------+  |
+                        |            ^  TPL5110 DONE pin       |  |
+                        |            |                         |  |
+  TPL5110 Timer ------>| EN         |   Power-on trigger      |  |
+  (duty cycle)         |            |                         |  |
+                        |            |                         |  |
+                        +--- UART ---+--- SPI ----+--- BLE ----+  |
+                        |            |            |            |  |
+              UART1     v            v            v            v  |
+    +-----------------------+  +----------+  +---------+  +------+|
+    |  RS-485 Transceiver   |  | LittleFS |  |  NVS    |  | NimBLE|
+    |  RX: D4  TX: D10      |  | (720 KB) |  |(Prefs)  |  | Stack |
+    +-----------+-----------+  +----+-----+  +----+----+  +--+---+
+                |                   |              |          |
+        +-------+-------+     CSV data       Config       +---+
+        |               |     files         key-value     |
+   +----+-----+  +------+-----+          store           |
+   | 7-in-1   |  | 9-in-1     |                         |
+   | SOIL     |  | WEATHER    |                    +-----+------+
+   | Slave 03 |  | Slave 01   |                    | BLE Sensor |
+   | Modbus   |  | Modbus     |                    | (NUS /     |
+   | 9600 baud |  | 9600 baud  |                    |  GATT)     |
+   +----------+  +------------+                    +------------+
+
+          UART0 (shared with USB)
+    +-------------------------------------------+
+    |              SIM800 GSM Modem              |
+    |  RX: D7    TX: D6    9600 baud            |
+    |                                            |
+    |  GSM/GPRS ----> MQTT Broker (TCP)          |
+    |             ----> InfluxDB v2 (HTTP)        |
+    |             ----> OTA Server (HTTP)         |
+    |             ----> SMTP Email                |
+    +-------------------------------------------+
+
+          WiFi (AP mode only, no STA)
+    +-------------------------------------------+
+    |          WiFi AP Web Portal               |
+    |  SSID: WeatherStation_AP                  |
+    |  Pass: 12345678    Channel: 1             |
+    |  Port: 80 (HTTP)                          |
+    |  Also: ArduinoOTA on same interface       |
+    +-------------------------------------------+
 ```
 
-### State Timeout Summary
+### 2.1 Pin Assignment Summary
 
-| State             | Timeout    | Settle Delay | Fallback State  |
-|-------------------|------------|--------------|-----------------|
-| STATE_WIFI_AP     | 300 000 ms | --           | STATE_GSM_INIT  |
-| STATE_GSM_INIT    | 120 000 ms | --           | STATE_NTP       |
-| STATE_NTP         |  30 000 ms | --           | STATE_WEATHER   |
-| STATE_WEATHER     |  30 000 ms | 15 000 ms    | STATE_SOIL      |
-| STATE_SOIL        |  30 000 ms | 15 000 ms    | STATE_SAVE      |
-| STATE_SAVE        |  10 000 ms | --           | STATE_RECONNECT |
-| STATE_RECONNECT   | 120 000 ms | --           | STATE_FINISH    |
-| STATE_PUBLISH     |  60 000 ms | --           | STATE_FINISH    |
-| STATE_FINISH      | none       | --           | (terminal)      |
+| Pin | GPIO/ADC | Function | Direction |
+|---|---|---|---|
+| `D4` | GPIO | RS-485 UART1 RX | Input |
+| `D10` | GPIO | RS-485 UART1 TX | Output |
+| `D7` | GPIO | GSM UART0 RX | Input |
+| `D6` | GPIO | GSM UART0 TX | Output |
+| `D2` | GPIO | TPL5110 DONE signal | Output |
+| `A0` | ADC | Battery voltage sense (divider input) | Input |
 
-### State Machine Diagram
+### 2.2 UART Allocation
 
-```
-                     Power On
-                        |
-                        v
-                 +---------------+
-                 | STATE_WIFI_AP |<--- min 60 s, max 300 s
-                 | WiFi AP + BLE |
-                 +-------+-------+
-                         |
-          +--------------+--------------+
-          |              |              |
-     BLE data       AP timeout     OTA request
-          |              |              |
-          +--------------+--------------+
-                         |
-                         v
-                 +---------------+
-                 | STATE_GSM_INIT|--- fail --> STATE_NTP
-                 | SIM800 + GPRS |
-                 +-------+-------+
-                         | success
-                         v
-                 +---------------+
-                 |   STATE_NTP   |
-                 | GSM RTC / NTP |
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 | STATE_WEATHER |
-                 | Modbus 0x01   |
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 |  STATE_SOIL   |
-                 | Modbus 0x03   |
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 |  STATE_SAVE   |
-                 | CSV + InfluxDB|
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 |STATE_RECONNECT|
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 | STATE_FINISH  |--- DONE pin --> Power Off
-                 | TPL5110 DONE  |--- (fallback) --> WDT loop
-                 +---------------+
-```
+| UART | Peripheral | Baud Rate | Pins |
+|---|---|---|---|
+| UART0 (`HardwareSerial(0)`) | SIM800 GSM | 9600 | D7 (RX), D6 (TX) |
+| UART1 (`HardwareSerial(1)`) | RS-485 Modbus | 9600 | D4 (RX), D10 (TX) |
+| USB CDC | Debug serial | 115200 | USB |
+
+Note: UART0 is shared between the GSM modem and the USB serial debug
+port.  The GSM modem takes ownership of UART0 at init time via
+`GsmHandler::init()`.
 
 ---
 
-## 1.4 Module Dependency Graph
+## 3. State Machine Flow
+
+The firmware operates as a single-threaded state machine in `loop()`.  Each
+state has a maximum duration (timeout); on expiry the machine advances to the
+fallback state.  This prevents the device from hanging indefinitely in any
+single state.
+
+### 3.1 State Table
+
+| # | State | Timeout | Fallback | Description |
+|---|---|---|---|---|
+| 0 | `STATE_WIFI_AP` | 300,000 ms (5 min) | `STATE_GSM_INIT` | WiFi AP + BLE scan/connect (minimum 60 s hold) |
+| 1 | `STATE_GSM_INIT` | 120,000 ms (2 min) | `STATE_NTP` | Initialize SIM800, register network, open GPRS |
+| 2 | `STATE_NTP` | 30,000 ms | `STATE_WEATHER` | Get network time (GSM RTC or NTP); fallback to last-known time + 10 min increment |
+| 3 | `STATE_WEATHER` | 30,000 ms | `STATE_SOIL` | 15 s settle delay, then read 9-in-1 weather sensor via Modbus |
+| 4 | `STATE_SOIL` | 30,000 ms | `STATE_SAVE` | 15 s settle delay, then read 7-in-1 soil sensor via Modbus |
+| 5 | `STATE_SAVE` | 10,000 ms | `STATE_RECONNECT` | Save data to LittleFS CSV; optionally rollover; send to InfluxDB v2 |
+| 6 | `STATE_RECONNECT` | 120,000 ms | `STATE_FINISH` | Legacy placeholder; immediately advances to `STATE_FINISH` |
+| 7 | `STATE_PUBLISH` | 60,000 ms | `STATE_FINISH` | Legacy placeholder; immediately advances to `STATE_FINISH` |
+| 8 | `STATE_FINISH` | -- (none) | -- | Pulse TPL5110 DONE pin; enter infinite WDT-fed loop |
+
+### 3.2 State Transition Diagram
 
 ```
-main_1.cpp
-  |
-  +-- sensor_v2.cpp / sensor_v2.h
-  |     RS485sensor       - Modbus RTU read/write with median filtering
-  |     dataProcess       - Median calculation helpers (16-bit and 32-bit)
-  |     batteryRead()     - ADC battery voltage with 64-sample averaging
-  |     |
-  |     +-- ModbusMaster (4-20ma/ModbusMaster@^2.0.1)
-  |
-  +-- Memory.cpp / Memory.h
-  |     Memory             - LittleFS CSV write/append/read/rotate
-  |     |
-  |     +-- LittleFS (ESP-IDF built-in)
-  |     +-- sensor_v2.h    - DataRecord, SensorData, timeStruct types
-  |
-  +-- GsmHandler.cpp / GsmHandler.h
-  |     GsmHandler         - SIM800 init, GPRS, MQTT, NTP, SMTP, OTA
-  |     |
-  |     +-- TinyGSM (vshymanskyy/TinyGSM@^0.12.0)
-  |     +-- PubSubClient (knolleary/PubSubClient@^2.8)
-  |     +-- utilities.h    - Pin definitions, timeouts, MQTT defaults
-  |
-  +-- WifiApServer.cpp / WifiApServer.h
-  |     WifiApServer       - WiFi AP, HTTP web server, auth sessions
-  |     |
-  |     +-- WiFi, WebServer (ESP-IDF built-in)
-  |     +-- Preferences    - NVS key-value store
-  |     +-- Memory         - File download / delete handlers
-  |     +-- GsmHandler     - Settings forms (MQTT, InfluxDB, OTA)
-  |     +-- sensor_v2.h    - SystemStatus, SensorData types
-  |
-  +-- NimBLE-Arduino (h2zero/NimBLE-Arduino@^1.4.2)
-  |     BLE scan, connect, NUS subscribe, GATT characteristic read
-  |
-  +-- utilities.h
-  |     Pin assignments, baud rates, timeouts, default credentials,
-  |     firmware version string
-  |
-  +-- Platform libraries
-        Arduino.h, HardwareSerial, esp_task_wdt, Preferences,
-        HTTPClient, Update (OTA), LittleFS
+                      Power On (TPL5110)
+                            |
+                            v
+                    +------------------+
+                    | STATE_WIFI_AP    |
+                    | Max: 5 min       |
+                    | Min hold: 1 min  |
+                    |                  |
+                    | - Start WiFi AP  |
+                    | - BLE scan/conn  |
+                    | - Web portal     |
+                    +--------+---------+
+                             |
+               +-------------+--------------+
+               |                            |
+         BLE data received           Timeout / AP idle
+         (after 1 min min)           (after 1 min min)
+               |                            |
+               +-------------+--------------+
+                             |
+                             v
+                    +------------------+
+                    | STATE_GSM_INIT   |
+                    | Timeout: 120 s   |
+                    |                  |
+                    | - Init SIM800    |
+                    | - GPRS connect   |
+                    | - Publish MQTT   |
+                    |   heartbeat      |
+                    +--------+---------+
+                             |
+                        Success / Fail
+                             |
+                             v
+                    +------------------+
+                    | STATE_NTP        |
+                    | Timeout: 30 s    |
+                    |                  |
+                    | - GSM RTC time   |
+                    | - or NTP sync    |
+                    | - or fallback    |
+                    |   (last + 10min) |
+                    | - OTA check      |
+                    +--------+---------+
+                             |
+                             v
+                    +------------------+
+                    | STATE_WEATHER    |
+                    | Timeout: 30 s    |
+                    | Settle: 15 s     |
+                    |                  |
+                    | - Modbus read    |
+                    |   Slave 0x01     |
+                    |   Reg 0x01F4,    |
+                    |   Len 16         |
+                    +--------+---------+
+                             |
+                        Read OK / Timeout
+                             |
+                             v
+                    +------------------+
+                    | STATE_SOIL       |
+                    | Timeout: 30 s    |
+                    | Settle: 15 s     |
+                    |                  |
+                    | - Modbus read    |
+                    |   Slave 0x03     |
+                    |   Reg 0x0000,    |
+                    |   Len 7          |
+                    +--------+---------+
+                             |
+                        Read OK / Timeout
+                             |
+                             v
+                    +------------------+
+                    | STATE_SAVE       |
+                    | Timeout: 10 s    |
+                    |                  |
+                    | - Rollover check |
+                    | - CSV append     |
+                    | - InfluxDB write |
+                    +--------+---------+
+                             |
+                             v
+                    +------------------+
+                    | STATE_RECONNECT  |
+                    | (immediate pass) |
+                    +--------+---------+
+                             |
+                             v
+                    +------------------+
+                    | STATE_FINISH     |
+                    |                  |
+                    | - Pulse DONE pin |
+                    | - Infinite loop  |
+                    |   with WDT feed  |
+                    +------------------+
 ```
 
-### Source File Summary
+### 3.3 STATE_WIFI_AP Exit Conditions
 
-| File               | Lines | Purpose                                           |
-|--------------------|-------|---------------------------------------------------|
-| `main_1.cpp`       | 1252  | State machine, BLE client logic, InfluxDB, OTA    |
-| `sensor_v2.cpp`    | 382   | Modbus sensor reads, median filtering, battery ADC |
-| `Memory.cpp`       | 348   | LittleFS CSV I/O, record parsing, storage rotation |
-| `GsmHandler.cpp`   | 320   | SIM800 driver, MQTT client, NTP sync, SMTP email  |
-| `WifiApServer.cpp` | 1800+ | WiFi AP web portal, settings, file browser, auth   |
-| `utilities.h`      | 109   | Pin map, constants, default configuration          |
+The WiFi AP state has the most complex exit logic because it must balance
+multiple concerns:
 
-### External Library Dependencies
+| Condition | Min elapsed | Action |
+|---|---|---|
+| OTA requested from web UI | 0 s (anytime) | Close AP, jump to `STATE_GSM_INIT` |
+| BLE data received (GATT or NUS notification parsed) | >= 60 s | Close AP, advance to `STATE_GSM_INIT` |
+| AP idle timeout (no connected clients) | >= 60 s | Close AP, advance to `STATE_GSM_INIT` |
+| Hard timeout (5 min elapsed) | >= 300 s | Force advance to `STATE_GSM_INIT` |
 
-| Library                     | Version  | Purpose                        |
-|-----------------------------|----------|--------------------------------|
-| ModbusMaster                | ^2.0.1   | Modbus RTU master protocol     |
-| PubSubClient                | ^2.8     | MQTT publish/subscribe         |
-| TinyGSM                     | ^0.12.0  | SIM800 AT command abstraction  |
-| NimBLE-Arduino              | ^1.4.2   | BLE central (scan/connect/NUS) |
+Before the 60-second minimum window expires, none of the normal exit
+conditions are checked.  The only early exit is an OTA update request from
+the web portal.
+
+### 3.4 NTP Fallback Chain
+
+The time-synchronization logic in `STATE_NTP` follows this priority order:
+
+1. **GSM RTC** -- Read via `TinyGsm::getGSMDateTime(DATE_FULL)`.  If the
+   returned date/time passes validation (year >= 2024, valid month/day/hour/min),
+   it is used directly.
+2. **NTP sync** -- If GSM RTC is invalid, issue AT+CNTP to
+   `pool.ntp.org` with a 60-second timeout, then re-read GSM RTC.
+3. **Last backup + increment** -- If all network time sources fail, read the
+   last timestamp from the most recent daily CSV file via
+   `readLastTimeFromBackup()` and add `TIME_INCREMENT_MINUTES` (10 minutes).
 
 ---
 
-## 1.5 Boot Sequence
+## 4. Module Dependency Graph
 
-From power-on to entering the main loop, the firmware executes the following
-steps in `setup()`:
+The codebase is organized into five source modules plus a central
+configuration header.  The diagram below shows compile-time `#include`
+dependencies (solid arrows) and runtime data-flow dependencies (dashed
+arrows).
 
 ```
- 1. Serial.begin(115200)                  -- USB CDC debug console
-    delay(500 ms)
-
- 2. esp_task_wdt_init(45, true)           -- Hardware watchdog, 45 s timeout
-    esp_task_wdt_add(NULL)                -- Register current task
-
- 3. pinMode(A0, INPUT)                    -- Battery voltage ADC
-    pinMode(D2, OUTPUT)
-    digitalWrite(D2, LOW)                 -- TPL5110 DONE held LOW initially
-
- 4. RS485Serial.begin(9600, 8N1, D4, D10) -- UART1 for Modbus sensors
-    modbusSensor.begin(&RS485Serial)      -- Initialise ModbusMaster instance
-
- 5. GSM_SERIAL.begin(9600, 8N1, D7, D6)  -- UART0 for SIM800 modem
-
- 6. LittleFS.begin(true)                  -- Mount flash filesystem
-                                           -- (format on failure)
-
- 7. initBLE()                             -- Read NVS key "bleEnable"
-                                           -- If true: NimBLEDevice::init()
-                                           -- Configure active scan params
-
- 8. NVS: read "bleSavedMac"               -- Load previously paired BLE MAC
-    If valid (17 chars):                   -- Set bleConnPending = true
-      schedule auto-reconnect              -- for STATE_WIFI_AP
-
- 9. Populate SystemStatus struct          -- Wire global pointers:
-    sysStatus.sensor  = &modbusSensor.currentSensor
-    sysStatus.time    = &currentTime
-    sysStatus.battMv  = &batteryVoltage
-    sysStatus.gsmAvail= &gsmAvailable
-    sysStatus.memory  = &internalMemory
-    sysStatus.gsm     = &gsmHandler
-    (and BLE device arrays, NVS strings, etc.)
-
-10. batteryVoltage = batteryRead()         -- 64-sample ADC average
-                                           -- Voltage divider: (R1+R2)/R2
-                                           -- R1 = R2 = 100 kOhm
-
-11. Enter loop() at STATE_WIFI_AP          -- Main state machine begins
+                           utilities.h
+                          (pins, constants,
+                           defaults, config)
+                               ^
+                               |  included by all
+          +--------------------+-------------------+
+          |                    |                   |
+     sensor_v2.h          GsmHandler.h        WifiApServer.h
+     sensor_v2.cpp        GsmHandler.cpp      WifiApServer.cpp
+          ^                    ^                    ^
+          |                    |                    |
+          +--- Memory.h -------+                    |
+          |   Memory.cpp       |                    |
+          |                    |                    |
+          +--------------------+--------------------+
+          |                                         |
+          v                                         v
+     main_1.cpp  <------ uses all modules ----------+
+     (state machine,
+      BLE, InfluxDB,
+      OTA, heartbeat)
 ```
 
-The initial state is always `STATE_WIFI_AP`. The watchdog timer is fed at every
-state transition, during long-running operations (GSM init, file I/O, BLE
-scans), and explicitly within the main loop.
+### 4.1 Include Dependency Details
+
+| Source File | Includes |
+|---|---|
+| `utilities.h` | `Arduino.h`, `HardwareSerial.h` |
+| `sensor_v2.h` | `utilities.h`, `ModbusMaster.h` |
+| `sensor_v2.cpp` | `sensor_v2.h`, `esp_task_wdt.h` |
+| `GsmHandler.h` | `utilities.h`, `sensor_v2.h`, `TinyGsmClient.h`, `PubSubClient.h` |
+| `GsmHandler.cpp` | `GsmHandler.h`, `esp_task_wdt.h` |
+| `Memory.h` | `FS.h`, `LittleFS.h`, `sensor_v2.h` |
+| `Memory.cpp` | `Memory.h`, `esp_task_wdt.h` |
+| `WifiApServer.h` | `Arduino.h`, `WiFi.h`, `WebServer.h`, `Preferences.h`, `sensor_v2.h`, `Memory.h`, `GsmHandler.h` |
+| `WifiApServer.cpp` | `WifiApServer.h`, `utilities.h`, `LittleFS.h`, `esp_task_wdt.h`, `ArduinoOTA.h`, `HTTPClient.h`, `Update.h` |
+| `main_1.cpp` | `Arduino.h`, `HardwareSerial.h`, `esp_task_wdt.h`, `NimBLEDevice.h`, `HTTPClient.h`, `Update.h`, `Preferences.h`, `sensor_v2.h`, `Memory.h`, `GsmHandler.h`, `WifiApServer.h` |
+
+### 4.2 Module Responsibility Summary
+
+| Module | Lines (approx) | Responsibility |
+|---|---|---|
+| `utilities.h` | 109 | Central configuration: pin definitions, timeouts, default credentials, sensor Modbus addresses |
+| `sensor_v2.cpp/.h` | 382 / 97 | RS-485 Modbus RTU reads for soil and weather sensors; median filtering; battery ADC read |
+| `GsmHandler.cpp/.h` | 320 / 59 | SIM800 modem init, GPRS connect, MQTT connect/publish, NTP sync, SMTP email, dynamic MQTT config |
+| `Memory.cpp/.h` | 348 / 42 | LittleFS file operations: CSV write/append, data serialization, rollover, line counting, record parsing |
+| `WifiApServer.cpp/.h` | 1643 / 150 | WiFi AP web portal: authentication, live data, file management, settings forms, BLE scan/connect UI, OTA trigger |
+| `main_1.cpp` | 1252 | State machine, BLE client (NimBLE scan/connect/NUS), InfluxDB v2 upload, remote OTA, heartbeat, time management |
 
 ---
 
-## 1.6 Duty Cycle / Power Lifecycle
+## 5. Boot Sequence
 
-The station uses the TPL5110 nanotimer as its primary power management
-controller. This design eliminates quiescent current draw between measurement
-cycles, maximising battery life.
-
-### Normal Operation (per wake cycle)
+The following steps execute in `setup()` on every power-on:
 
 ```
-               TPL5110 timer interval
-              (set by external resistor,
-               e.g. 10 min / 30 min / 60 min)
+ Step  Action                                    Detail
+ ----  ------                                    ------
+  1    Serial.begin(115200)                      Debug console
+       delay(500 ms)
 
-  Power OFF ──┐                               ┌── Power OFF
-              │                               │
-              └─> Power ON                    │
-                   |                          │
-                   |  Full state machine      │
-                   |  (WiFi AP, BLE, GSM,     │
-                   |   sensors, save, InfluxDB)│
-                   |                          │
-                   |  STATE_FINISH:           │
-                   |  DONE = LOW (50 ms)      │
-                   |  DONE = HIGH (2 s hold)  │
-                   |                          │
-                   └── TPL5110 cuts power ────┘
+  2    esp_task_wdt_init(45, true)               Initialize watchdog timer
+       esp_task_wdt_add(NULL)                    Subscribe main task to WDT
+
+  3    Print firmware banner                     "[FW] All-in-One Weather Station v2.3.5"
+
+  4    pinMode(A0, INPUT)                        Battery voltage sense pin
+       pinMode(D2, OUTPUT)
+       digitalWrite(D2, LOW)                     TPL5110 DONE held LOW initially
+
+  5    RS485Serial.begin(9600, 8N1, D4, D10)     Start UART1 for RS-485
+       modbusSensor.begin(&RS485Serial)          Pass serial port to Modbus master
+
+  6    GSM_SERIAL.begin(9600, 8N1, D7, D6)       Start UART0 for SIM800
+
+  7    LittleFS.begin(true)                      Mount filesystem (format on fail)
+                                                   Partition: 720 KB at 0x350000
+
+  8    initBLE()                                 Initialize NimBLE if enabled in NVS
+       - Read "bleEnable" from Preferences
+       - NimBLEDevice::init("WeatherStation-GW")
+       - Set power to ESP_PWR_LVL_P3
+       - Configure active scan (interval=100, window=99)
+
+  9    Load BLE saved MAC from NVS               "bleSavedMac" in "ws-cfg" namespace
+       If valid (17 chars):
+         - Set bleTargetMac and bleConnPending=true
+         - Auto-reconnect will occur in STATE_WIFI_AP
+
+ 10    Load last OTA timestamp from NVS          "lastota" key for web portal display
+
+ 11    Populate SystemStatus struct               Wire global pointers for web portal:
+       sysStatus.sensor     -> modbusSensor.currentSensor
+       sysStatus.time       -> currentTime
+       sysStatus.battMv     -> batteryVoltage
+       sysStatus.gsmAvail   -> gsmAvailable
+       sysStatus.gsmRssi    -> gsmRssi
+       sysStatus.bleActive  -> bleActive
+       sysStatus.memory     -> internalMemory
+       sysStatus.gsm        -> gsmHandler
+       sysStatus.bleDevices -> bleDevices[]
+       ... (13 more fields for BLE, OTA, NUS state)
+
+ 12    batteryRead()                             64-sample ADC average on A0
+       - Voltage divider: R1=100k, R2=100k (ratio=2.0)
+       - Calibration factor: 1.000
+       - Result in millivolts stored in batteryVoltage
+
+ 13    Print "===== SETUP COMPLETE ====="         Enter loop() -> STATE_WIFI_AP
 ```
 
-### Timeline
+### 5.1 NVS (Preferences) Namespace
 
-1. **TPL5110 wakes the ESP32** at the configured interval. The ESP32 receives
-   full power and begins the boot sequence.
-2. **State machine runs.** The entire cycle (WiFi AP, BLE, GSM init, NTP,
-   weather read, soil read, save, InfluxDB upload) typically completes in 2 to
-   5 minutes depending on GSM signal conditions and BLE activity.
-3. **STATE_FINISH pulses the DONE pin:**
-   - Pin D2 is driven `LOW` for 50 ms.
-   - Pin D2 is then driven `HIGH` and held for at least 2 seconds.
-   - The TPL5110 detects the rising edge and disconnects power from the ESP32.
-4. **Power is cut.** The ESP32 is fully unpowered. All RAM contents are lost.
-   Persistent data survives in LittleFS (flash) and NVS (preferences).
+All persistent configuration is stored in the NVS namespace `"ws-cfg"`,
+managed through the Arduino `Preferences` API.
 
-### Fallback Behaviour
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `webpass` | String | `"admin"` | Web portal login password |
+| `apTimeout` | UInt | 5 | AP idle timeout in minutes (0=never) |
+| `bleEnable` | Bool | false | Enable BLE client scanning |
+| `bleSavedMac` | String | `""` | Last connected BLE device MAC |
+| `srcModbus` | Bool | true | Enable Modbus RS-485 sensors |
+| `srcBle` | Bool | false | Enable BLE sensor data source |
+| `fileInterval` | UInt | 10 | New data file every N minutes |
+| `influxEn` | Bool | false | Enable InfluxDB v2 upload |
+| `influxHost` | String | `""` | InfluxDB server host/IP |
+| `influxPort` | UInt | 8086 | InfluxDB port |
+| `influxToken` | String | `""` | InfluxDB API token |
+| `influxOrg` | String | `""` | InfluxDB organization |
+| `influxBucket` | String | `""` | InfluxDB bucket |
+| `mqttEnable` | Bool | true | Enable MQTT publish |
+| `mqttHost` | String | (compile-time) | MQTT broker host |
+| `mqttPort` | UInt | 1883 | MQTT broker port |
+| `mqttUser` | String | (compile-time) | MQTT username |
+| `mqttPass` | String | (compile-time) | MQTT password |
+| `emailEnable` | Bool | false | Enable email notifications |
+| `emailuser` | String | `""` | Gmail sender address |
+| `emailpass` | String | `""` | Gmail app password |
+| `emailto` | String | `""` | Primary recipient |
+| `emaillightto` | String | `""` | Lightning report recipient |
+| `emailFreqH` | UInt | 24 | Email notification frequency (hours) |
+| `emailalarm` | Bool | false | Login failure alarm enabled |
+| `otaserver` | String | `""` | OTA server base URL |
+| `otaproject` | String | `""` | OTA project name |
+| `otadevice` | String | `"All-in-One"` | OTA device type |
+| `otadlpass` | String | `""` | OTA download password |
+| `otapass` | String | `"admin"` | ArduinoOTA password |
+| `otainterval` | UInt | 24 | Auto-check interval (hours) |
+| `otaboot` | Bool | false | Check OTA on every boot |
+| `ntpEnable` | Bool | true | Enable NTP sync on GSM connect |
+| `memRollover` | UInt | 80 | LittleFS rollover threshold (%) |
+| `memRolloverEn` | Bool | true | Enable rollover |
+| `lastota` | String | `"Never"` | Last successful OTA timestamp |
+| `lastDailyCsv` | String | `"/DATA.csv"` | Path to current daily CSV |
 
-If the TPL5110 fails to cut power (hardware fault, wiring issue, or the DONE
-signal is not acknowledged):
+---
 
-- The firmware prints a warning: `[WARN] TPL5110 did not cut power`.
-- It enters an infinite loop calling `feedWDT()` every 1 second.
-- The hardware watchdog (45 s timeout) is kept alive indefinitely, preventing
-  a reset.
-- This ensures the station does not drain the battery through repeated
-  boot-reset cycles.
+## 6. Duty Cycle / Power Lifecycle
 
-### Persistent State Across Cycles
+The Srisaket Weather Station is a single-shot device controlled by the
+TPL5110 nanopower timer.  Each duty cycle follows this sequence:
 
-Since the ESP32 has no battery-backed RTC and RAM is volatile, the following
-mechanisms preserve continuity:
+### 6.1 Power-On
 
-| Data                | Storage        | Key / Path                     |
-|---------------------|----------------|--------------------------------|
-| Daily CSV           | LittleFS       | `/DD-MM-YYYY.csv`              |
-| BLE sensor CSV      | LittleFS       | `/BLE-DD-MM-YYYY.csv`          |
-| Last daily CSV path | NVS (`ws-cfg`) | `lastDailyCsv`                 |
-| Paired BLE MAC      | NVS (`ws-cfg`) | `bleSavedMac`                  |
-| Last OTA timestamp  | NVS (`ws-cfg`) | `lastota`                      |
-| All user settings   | NVS (`ws-cfg`) | MQTT, InfluxDB, WiFi, BLE, etc |
+```
+    TPL5110 Timer
+    (externally configured,
+     typically 5--10 min interval)
+         |
+         |  Connects VCC to circuit
+         v
+    ESP32-C3 boots
+    setup() runs (see Section 5)
+    loop() enters STATE_WIFI_AP
+```
 
-On each wake, the NTP state reconstructs the current timestamp from either the
-GSM network clock, NTP, or (as a last resort) the most recent timestamp in the
-daily CSV plus a 10-minute increment.
+The TPL5110 timer interval is set by an external resistor on the TPL5110
+board.  It is not configurable in firmware.  Typical deployment intervals
+are 5 or 10 minutes.
+
+### 6.2 DONE Pin Signaling
+
+When the state machine reaches `STATE_FINISH`, the firmware pulses the
+TPL5110 DONE pin (D2) to signal that work is complete:
+
+```
+    STATE_FINISH entry
+         |
+         |  delay(3000 ms)              -- Final serial output flush
+         |  Serial.flush()
+         |
+         |  digitalWrite(D2, LOW)       -- Ensure LOW baseline
+         |  delay(50 ms)
+         |
+         |  digitalWrite(D2, HIGH)      -- Pulse DONE
+         |  delay(2000 ms)              -- Hold HIGH for 2 seconds
+         |
+         |  Serial.println("[WARN] TPL5110 did not cut power")
+         |
+         |  while (1) {                 -- Infinite fallback loop
+         |      esp_task_wdt_reset();       Feed WDT to stay alive
+         |      delay(1000);
+         |  }
+```
+
+The TPL5110 requires the DONE pin to be driven HIGH.  Once it detects the
+rising edge (held for a sufficient duration), the TPL5110 disconnects power
+from the load.  The 2-second hold ensures the TPL5110 reliably detects the
+signal.
+
+### 6.3 Fallback Behavior
+
+If the TPL5110 does not cut power after the DONE pulse (hardware fault,
+wiring issue, or timer misconfiguration), the firmware enters an infinite
+loop that continuously feeds the hardware watchdog.  This prevents the WDT
+from triggering a system reset, which would restart the state machine and
+cause an unintended second duty cycle.
+
+The serial message `"[WARN] TPL5110 did not cut power"` is printed once
+before entering the fallback loop, providing a diagnostic indicator if the
+debug console is monitored.
+
+### 6.4 Typical Duty Cycle Timeline
+
+The following table shows a typical duty cycle with approximate durations.
+Actual times vary based on sensor response, GSM network conditions, and
+whether the WiFi AP is accessed.
+
+| Phase | Duration | Cumulative |
+|---|---|---|
+| Boot + setup() | ~2 s | 2 s |
+| STATE_WIFI_AP (min hold) | 60 s | 62 s |
+| STATE_GSM_INIT | 15--120 s | 77--182 s |
+| STATE_NTP | 2--30 s | 79--212 s |
+| STATE_WEATHER (15 s settle + read) | 18--30 s | 97--242 s |
+| STATE_SOIL (15 s settle + read) | 18--30 s | 115--272 s |
+| STATE_SAVE | 1--10 s | 116--282 s |
+| STATE_RECONNECT (pass-through) | <1 s | 116--282 s |
+| STATE_FINISH (DONE pulse) | 5 s | 121--287 s |
+| **Total (typical)** | **~2--5 min** | -- |
+
+### 6.5 Power Architecture Notes
+
+- The ESP32-C3 has no deep-sleep in this design.  Power is physically
+  removed by the TPL5110 between duty cycles.  All RAM state is lost.
+- Persistent data survives across cycles in LittleFS (CSV files) and NVS
+  (Preferences / configuration).
+- The SIM800 modem is not explicitly powered down before the DONE pulse.
+  The TPL5110 removes power to the entire board, including the GSM modem.
+- The BLE saved MAC in NVS enables automatic reconnection to the last
+  known BLE sensor device on the next boot, without requiring the web portal.
+
+---
+
+*End of Module 1 -- System Overview.  Refer to subsequent modules for
+detailed documentation of each subsystem.*

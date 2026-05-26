@@ -1,8 +1,7 @@
-# Module 5 -- Configuration & Deployment
+# Module 5 -- Configuration and Deployment
 
-This module covers first-time provisioning, NVS configuration keys, the web portal settings interface, OTA firmware updates, and the external service requirements (MQTT, InfluxDB, Email). File system layout and CSV data formats are documented at the end.
-
-*Credits: IDEA Laboratory @ KMUTT*
+Firmware v2.3.5 | Build 18-05-2026
+IDEA Laboratory @ KMUTT
 
 ---
 
@@ -22,675 +21,794 @@ This module covers first-time provisioning, NVS configuration keys, the web port
 
 ## 1. First-Time Provisioning
 
-Follow these steps to flash and configure a new weather station board.
+This section describes the complete procedure for flashing and configuring a new XIAO ESP32-C3 board.
 
-### Prerequisites
+### 1.1 Hardware Connections
 
-- PlatformIO installed (`pio` command available)
-- USB cable connected to the XIAO ESP32-C3 board
-- SIM card inserted in the SIM800L modem slot
-- RS485 sensors connected (soil sensor, weather sensor)
+| Interface | XIAO Pin | Function |
+|-----------|----------|----------|
+| RS485 RX  | D4       | Modbus sensor data receive |
+| RS485 TX  | D10      | Modbus sensor data transmit |
+| GSM RX    | D7       | SIM800 UART receive |
+| GSM TX    | D6       | SIM800 UART transmit |
+| Battery   | A0       | Voltage divider (R1=R2=100 kOhm) |
+| TPL5110   | D2       | Done signal (power cut-off) |
 
-### Step-by-Step Procedure
+### 1.2 Build and Flash
 
-**Step 1 -- Connect USB**
-
-Connect the XIAO ESP32-C3 to your computer via USB. The board should enumerate as a serial port.
-
-**Step 2 -- Build and upload firmware**
+Prerequisites: PlatformIO installed, USB-C cable.
 
 ```bash
 cd Srisaket_Version
 pio run -t upload
 ```
 
-This compiles the firmware and writes it to the ESP32-C3 flash. The board configuration in `platformio.ini` targets `seeed_xiao_esp32c3` with the OTA partition scheme `partitions_ota_4mb.csv`.
+The board uses the `partitions_ota_4mb.csv` partition table providing two 1.625 MB OTA app slots and a 720 KB LittleFS data partition.
 
-**Step 3 -- Open serial monitor**
+### 1.3 Verify Boot Messages
+
+Open a serial monitor at 115200 baud:
 
 ```bash
-pio device monitor
+pio device monitor -b 115200
 ```
 
-The monitor baud rate is 115200. You should see boot output immediately.
-
-**Step 4 -- Verify successful boot**
-
-Look for the following two lines in the serial output:
+Expected boot output (abbreviated):
 
 ```
+[WDT] Watchdog initialized
 [FW] All-in-One Weather Station v2.3.5
+[SERIAL] RS485 UART1 started
+[SERIAL] GSM UART0 started
+[FS] LittleFS mounted
+[BLE] NimBLE client ready (scanner)       # if BLE enabled
+[BATT] xxxx mV
 ===== SETUP COMPLETE =====
 ```
 
-The first line confirms firmware version. The second confirms that all subsystems (RS485 serial, GSM serial, LittleFS, BLE) initialized without fatal errors.
+### 1.4 WiFi AP Connection
 
-**Step 5 -- Connect to WiFi AP**
+After boot, the station enters `STATE_WIFI_AP` and starts a WiFi access point:
 
-After setup completes, the device creates a WiFi access point:
+| Parameter     | Value              |
+|---------------|--------------------|
+| SSID          | `WeatherStation_AP` |
+| Password      | `12345678`         |
+| Channel       | 1                  |
+| IP (gateway)  | 192.168.4.1        |
+| Min duration  | 60 seconds         |
+| Default idle timeout | 5 minutes  |
 
-| Parameter | Value |
-|---|---|
-| SSID | `WeatherStation_AP` |
-| Password | `12345678` |
-| Channel | 1 |
-| Default IP | `192.168.4.1` |
+Connect a computer or phone to the access point, then open a browser to `http://192.168.4.1`.
 
-Connect to this AP from your laptop or phone.
-
-**Step 6 -- Open the web portal**
-
-Browse to:
-
-```
-http://192.168.4.1
-```
-
-You will be redirected to the login page.
-
-**Step 7 -- Log in**
+### 1.5 Web Portal Login
 
 Default credentials:
 
-| Field | Default |
-|---|---|
+| Field    | Value   |
+|----------|---------|
 | Username | `admin` |
 | Password | `admin` |
 
-Change these immediately after first login (see [Section 3 -- Password](#3-web-portal-configuration)).
+After login, a session cookie (`sid`) is issued with a 10-minute idle timeout. The password should be changed immediately via Settings > Change Password.
 
-**Step 8 -- Configure GSM APN**
+### 1.6 Initial Configuration Checklist
 
-Navigate to the web portal settings and verify that the GSM APN is set correctly. The default APN is `internet`, which is suitable for most Thai mobile carriers (AIS, DTAC, TrueMove). Adjust if your SIM card provider requires a different APN.
-
-**Step 9 -- Configure external services**
-
-Set up at least one data destination:
-
-- **MQTT broker** -- host, port, username, password
-- **InfluxDB v2** -- host, port, token, org, bucket
-- **Email** -- SMTP server, credentials, recipient
-
-See sections 5, 6, and 7 below for service requirements.
-
-**Step 10 -- Save settings**
-
-All settings changes are persisted to NVS immediately upon saving. No separate "apply" or "reboot" step is needed for configuration changes (though BLE enable/disable requires a restart).
+1. **GSM APN** -- Hardcoded to `"internet"` in `utilities.h`. Override at compile time if the carrier requires a different APN.
+2. **MQTT Broker** -- Settings > MQTT. Enter broker host/IP, port (default 1883), username, and password. Use the Test Server button to verify connectivity.
+3. **InfluxDB v2** -- Settings > InfluxDB. Enable, then enter host, port (default 8086), API token, organization, and bucket. Use the Test Server button.
+4. **Email** -- Settings > Email. Enter Gmail address (sender), app password, recipient, and notification frequency. Use the Test Email button.
+5. **OTA Server** -- Settings > OTA. Enter the base URL of the OTA update server (e.g., `http://host:8889`). Set project name, device type, and download password.
+6. **BLE Client** (optional) -- Settings > BLE Client. Enable, scan, and connect to a BLE sensor device.
 
 ---
 
 ## 2. NVS Configuration Keys
 
-All configuration is stored in the ESP32 NVS (Non-Volatile Storage) under the namespace `ws-cfg`. The web portal and firmware read and write these keys through the Arduino `Preferences` library.
+All persistent configuration is stored in the ESP32 NVS (Non-Volatile Storage) under the namespace `"ws-cfg"`. Keys are accessed via the Arduino `Preferences` library. The table below lists every key found in the source code.
 
-### Core Configuration Keys
+### 2.1 Complete Key Reference
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `bleEnable` | bool | `false` | Enable BLE client functionality (requires restart) |
-| `bleSavedMac` | string | `""` | Saved BLE device MAC address for auto-reconnect |
-| `lastDailyCsv` | string | `"/DATA.csv"` | Current daily CSV filename path |
-| `lastota` | string | `"Never"` | Timestamp of last successful OTA update |
-| `otaserver` | string | `""` | OTA firmware server base URL (e.g. `http://host:8889`) |
-| `otainterval` | uint | `24` | OTA check interval in hours; 0 disables periodic checks |
-| `otaboot` | bool | `false` | Check for OTA update on every boot |
-| `otaproject` | string | `""` | OTA project identifier sent to server |
-| `otadevice` | string | `"All-in-One"` | OTA device identifier sent to server |
-| `otadlpass` | string | `""` | OTA download password (sent as `x-ESP32-password` header) |
-| `otapass` | string | `"admin"` | ArduinoOTA password for local WiFi OTA |
-| `influxEn` | bool | `false` | Enable InfluxDB v2 data upload |
-| `influxHost` | string | `"119.59.103.220"` | InfluxDB server address |
-| `influxPort` | uint | `8086` | InfluxDB server port |
-| `influxToken` | string | *(token)* | InfluxDB v2 authentication token |
-| `influxOrg` | string | `"Pamiang"` | InfluxDB organization name |
-| `influxBucket` | string | `"Srisaket_Station_I"` | InfluxDB bucket name |
-| `influxLastSync` | string | `"--"` | Timestamp of last successful InfluxDB write |
-| `memRollover` | uint | `80` | Storage usage percentage threshold for rollover |
-| `memRolloverEn` | bool | `true` | Enable automatic storage rollover when threshold is exceeded |
-| `apTimeout` | uint | `5` | WiFi AP idle timeout in minutes; 0 = never timeout |
-| `fileInterval` | uint | `10` | Data save interval in minutes |
-| `webpass` | string | `"admin"` | Web portal login password |
-| `ntpEnable` | bool | `true` | Enable NTP time sync on GSM connect |
-| `srcModbus` | bool | `true` | Enable Modbus RS485 sensor reading |
-| `srcBle` | bool | `false` | Enable BLE sensor data collection |
+| NVS Key | Type | Default Value | Source | Description |
+|---------|------|---------------|--------|-------------|
+| `bleEnable` | `bool` | `false` | `main_1.cpp` L287, `WifiApServer.cpp` L877 | Enable BLE client scanning and connection |
+| `bleSavedMac` | `String` | `""` | `main_1.cpp` L379/L427, `WifiApServer.cpp` L877 | Last connected BLE device MAC address (format `XX:XX:XX:XX:XX:XX`), used for auto-reconnect |
+| `lastDailyCsv` | `String` | `"/DATA.csv"` | `main_1.cpp` L794, L1195 | Path to the current daily CSV file |
+| `lastota` | `String` | `"Never"` | `main_1.cpp` L757, L704 | Timestamp of the last successful OTA update |
+| `otaserver` | `String` | `""` | `WifiApServer.cpp` L807, `main_1.cpp` L640 | OTA server base URL (e.g., `http://host:8889`) |
+| `otainterval` | `UInt` | `24` | `WifiApServer.cpp` L812, `main_1.cpp` L641 | Auto-check interval in hours; 0 = disabled |
+| `otaboot` | `bool` | `false` | `WifiApServer.cpp` L813, `main_1.cpp` L642 | Check for firmware update on every boot |
+| `otaproject` | `String` | `""` | `WifiApServer.cpp` L808, `main_1.cpp` L643 | OTA project identifier sent to server |
+| `otadevice` | `String` | `"All-in-One"` | `WifiApServer.cpp` L809, `main_1.cpp` L644 | OTA device type identifier sent to server |
+| `otadlpass` | `String` | `""` | `WifiApServer.cpp` L810, `main_1.cpp` L645 | OTA download password (sent as `x-ESP32-password` header) |
+| `otapass` | `String` | `"admin"` | `WifiApServer.cpp` L811, L240 | ArduinoOTA password for local WiFi OTA |
+| `apTimeout` | `UInt` | `5` | `WifiApServer.cpp` L244, L851 | WiFi AP idle timeout in minutes; 0 = never timeout |
+| `webpass` | `String` | `"admin"` | `WifiApServer.cpp` L334 | Web portal login password (min 4 characters) |
+| `srcModbus` | `bool` | `true` | `WifiApServer.cpp` L929 | Enable Modbus RS485 sensor data collection |
+| `srcBle` | `bool` | `false` | `WifiApServer.cpp` L930 | Enable BLE sensor data collection |
+| `fileInterval` | `UInt` | `10` | `WifiApServer.cpp` L948 | Data file rotation interval in minutes (1--1440) |
+| `influxEn` | `bool` | `false` | `main_1.cpp` L484, `WifiApServer.cpp` L960 | Enable InfluxDB v2 data push |
+| `influxHost` | `String` | `"119.59.103.220"` | `main_1.cpp` L485 | InfluxDB server host or IP |
+| `influxPort` | `UInt` | `8086` | `main_1.cpp` L486 | InfluxDB server port |
+| `influxToken` | `String` | *(see note)* | `main_1.cpp` L487 | InfluxDB v2 API authentication token |
+| `influxOrg` | `String` | `"Pamiang"` | `main_1.cpp` L489 | InfluxDB organization name |
+| `influxBucket` | `String` | `"Srisaket_Station_I"` | `main_1.cpp` L490 | InfluxDB bucket name |
+| `influxLastSync` | `String` | `"--"` | `WifiApServer.cpp` L966 | Timestamp of last successful InfluxDB sync (display only) |
+| `ntpEnable` | `bool` | `true` | `WifiApServer.cpp` L1003 | Enable NTP time sync via GSM |
+| `memRollover` | `UInt` | `80` | `WifiApServer.cpp` L1017, `main_1.cpp` L1032 | Storage usage percentage threshold to trigger rollover (10--90) |
+| `memRolloverEn` | `bool` | `true` | `WifiApServer.cpp` L1018, `main_1.cpp` L1033 | Enable automatic file rollover when storage threshold is reached |
+| `mqttEnable` | `bool` | `true` | `WifiApServer.cpp` L1054 | Enable MQTT data publishing |
+| `mqttHost` | `String` | `"119.59.103.220"` | `WifiApServer.cpp` L1055 | MQTT broker host or IP |
+| `mqttPort` | `UInt` | `1883` | `WifiApServer.cpp` L1056 | MQTT broker port |
+| `mqttUser` | `String` | `"kmutt"` | `WifiApServer.cpp` L1057 | MQTT authentication username |
+| `mqttPass` | `String` | `"kmutt@kmutt"` | `WifiApServer.cpp` L1249 | MQTT authentication password |
+| `emailEnable` | `bool` | `false` | `WifiApServer.cpp` L1088 | Enable email notifications |
+| `emailsmtp` | `String` | `"smtp.gmail.com"` | `WifiApServer.cpp` L1528 | SMTP server hostname |
+| `emailport` | `UInt` | `587` | `WifiApServer.cpp` L1267 | SMTP server port |
+| `emailuser` | `String` | `""` | `WifiApServer.cpp` L1089 | Email sender address (Gmail) |
+| `emailpass` | `String` | `""` | `WifiApServer.cpp` L1264 | Email app-specific password |
+| `emailto` | `String` | `""` | `WifiApServer.cpp` L1090 | Primary email recipient address |
+| `emaillightto` | `String` | `""` | `WifiApServer.cpp` L1091 | Lightning report recipient address |
+| `emailFreqH` | `UInt` | `24` | `WifiApServer.cpp` L1092 | Email notification frequency in hours (1--168) |
+| `emailalarm` | `bool` | `false` | `WifiApServer.cpp` L1093 | Send email alert on failed web portal login attempts |
 
-### MQTT Configuration Keys
+**Note on `influxToken` default:** The source code at `main_1.cpp` line 487 contains a hardcoded default token string. This is a compile-time fallback; it should be replaced with the deployment-specific token via the web portal.
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `mqttEnable` | bool | `true` | Enable MQTT publishing |
-| `mqttHost` | string | `"119.59.103.220"` | MQTT broker address |
-| `mqttPort` | uint | `1883` | MQTT broker port |
-| `mqttUser` | string | `"kmutt"` | MQTT username |
-| `mqttPass` | string | `"kmutt@kmutt"` | MQTT password |
+### 2.2 Hardcoded Constants (not in NVS)
 
-The MQTT client ID is hardcoded as `MQTT_CLIENT_ID` (`"PCB_TEST_1"`) in `utilities.h`.
+These values are defined at compile time in `utilities.h` and cannot be changed at runtime:
 
-### Email Configuration Keys
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `emailEnable` | bool | `false` | Enable email notifications |
-| `emailuser` | string | `""` | Email sender address (Gmail) |
-| `emailpass` | string | `""` | Email sender password (Gmail app password) |
-| `emailsmtp` | string | `"smtp.gmail.com"` | SMTP server address |
-| `emailport` | uint | `587` | SMTP server port |
-| `emailto` | string | `""` | Primary email recipient |
-| `emaillightto` | string | `""` | Lightning report recipient |
-| `emailFreqH` | uint | `24` | Email notification frequency in hours |
-| `emailalarm` | bool | `false` | Send email on failed login attempts |
-
-### Reading NVS Keys Programmatically
-
-NVS keys are accessed through the Arduino `Preferences` library:
-
-```cpp
-Preferences nvs;
-nvs.begin("ws-cfg", true);  // true = read-only
-String value = nvs.getString("influxHost", "119.59.103.220");
-bool enabled = nvs.getBool("influxEn", false);
-nvs.end();
-```
-
-For the complete set of keys and their save handlers, see `src/WifiApServer.cpp` (settings handlers) and `src/main_1.cpp` (runtime reads).
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `GSM_APN` | `"internet"` | GPRS access point name |
+| `MQTT_TOPIC` | `"weather/Srisaket/Station_1"` | MQTT publish topic |
+| `MQTT_PING_TOPIC` | `"weather/Srisaket/Station_1/ping"` | MQTT heartbeat request topic |
+| `MQTT_PONG_TOPIC` | `"weather/Srisaket/Station_1/pong"` | MQTT heartbeat response topic |
+| `MQTT_CLIENT_ID` | `"PCB_TEST_1"` | MQTT client identifier |
+| `WIFI_AP_SSID` | `"WeatherStation_AP"` | AP network name |
+| `WIFI_AP_PASSWORD` | `"12345678"` | AP network password |
+| `WEB_DEFAULT_USER` | `"admin"` | Portal username (fixed, not stored in NVS) |
+| `SERIAL_BAUDRATE` | `115200` | Debug/console serial speed |
+| `SERIAL_RS485` | `9600` | Modbus RS485 baud rate |
+| `SERIAL_GSM` | `9600` | SIM800 UART baud rate |
+| `WDT_TIMEOUT_SEC` | `45` | Hardware watchdog timeout (seconds) |
+| `TIME_INCREMENT_MINUTES` | `10` | Minutes to add when NTP fails |
 
 ---
 
 ## 3. Web Portal Configuration
 
-The web portal is accessible at `http://192.168.4.1` while the WiFi AP is active. It provides a dark-themed, mobile-responsive interface for all station configuration.
+The web portal is served by a `WebServer` instance on port 80 over the WiFi AP interface. It provides five main sections: Live, Settings, Files, Log, and About.
 
-### Settings Page Sections
+### 3.1 Navigation Structure
 
-The Settings page is organized into the following card sections:
+```
+/ (root)               -- Redirects to /live or /login
+/login                 -- Authentication page (GET/POST)
+/logout                -- Clear session, redirect to /login
+/live                  -- Real-time sensor dashboard
+/api/live              -- JSON API for sensor data (auto-refresh every 30 s)
+/api/ble               -- JSON API for BLE data (auto-refresh every 5 s)
+/files                 -- LittleFS file browser with download/delete
+/download?f=<name>     -- Download a specific file
+/settings              -- Configuration panels
+/about                 -- Credits and firmware info
+/reboot                -- Restart the device
+```
 
-#### OTA Update (via GSM)
+### 3.2 Settings Sections
 
-| Field | Description |
-|---|---|
-| OTA Server URL | Base URL of the firmware server (e.g. `http://host:8889`) |
-| Project name | Project identifier sent in the OTA check request |
-| Device type | Device identifier (default: `All-in-One`) |
-| Download password | Password for authenticated OTA downloads |
-| ArduinoOTA password | Password for local WiFi-based OTA via ArduinoIDE |
-| Auto-check interval | Hours between automatic OTA checks; 0 disables |
-| Check on boot | Checkbox to check for updates on every boot |
+The Settings page is divided into the following cards, each with its own save form and optional test button.
 
-Actions: **Save OTA**, **Test Server** (checks connectivity), **Update Now** (triggers immediate OTA).
+#### 3.2.1 OTA Update (via GSM)
 
-#### WiFi AP
+| Field | NVS Key | Input Type | Notes |
+|-------|---------|------------|-------|
+| OTA Server URL | `otaserver` | URL | Base URL only, e.g., `http://host:8889` |
+| Project name | `otaproject` | Text | Identifier sent in `x-ESP32-project` header |
+| Device type | `otadevice` | Text | Default `"All-in-One"`; sent in `x-ESP32-device` header |
+| Download password | `otadlpass` | Password | Sent in `x-ESP32-password` header; optional |
+| ArduinoOTA password | `otapass` | Password | For local PlatformIO OTA over WiFi |
+| Auto-check interval | `otainterval` | Number | Hours; 0 disables periodic check |
+| Check on boot | `otaboot` | Checkbox | If checked, queries server on every boot |
 
-| Field | Description |
-|---|---|
-| AP idle timeout | Dropdown: 1, 5, 10, 15, 30, 60 minutes, or Never |
+Actions: **Test Server** (sends GET `/update` via GSM), **Update Now** (triggers immediate OTA cycle).
 
-The AP closes automatically when no clients are connected for the selected duration. Connecting a client resets the countdown.
+#### 3.2.2 WiFi AP
 
-#### BLE Client
+| Field | NVS Key | Input Type | Options |
+|-------|---------|------------|---------|
+| Close AP after idle | `apTimeout` | Select | 1, 5, 10, 15, 30, 60 min, or Never |
 
-| Field | Description |
-|---|---|
-| Enable BLE Client | Checkbox to enable/disable BLE scanning and connection |
-| Saved device | Shows the currently saved BLE MAC (if any) |
-| Scan results | Table of discovered BLE devices with Name, MAC, RSSI |
+The AP idle timer pauses when a WiFi client is connected and resumes only when no clients remain. The minimum AP duration is 60 seconds regardless of this setting.
 
-Actions: **Save**, **Scan Now**, **Connect** (per device), **Forget** (remove saved MAC).
+#### 3.2.3 BLE Client
 
-Note: Enabling/disabling BLE requires a device restart to take effect.
+| Field | NVS Key | Input Type | Notes |
+|-------|---------|------------|-------|
+| Enable BLE Client | `bleEnable` | Checkbox | Requires restart to take effect |
 
-#### Data Sources
+Additional controls (not form-based):
+- **Scan Now** -- triggers a 3-second BLE scan; results shown in a table with Name, MAC, RSSI, and Connect button.
+- **Forget** -- clears `bleSavedMac` from NVS, disconnects current device.
+- **Connect** -- initiates GATT or NUS connection to selected device MAC.
+- **Disconnect** -- drops active BLE connection.
 
-| Field | Description |
-|---|---|
-| Modbus RS485 | Checkbox to enable/disable RS485 sensor reading |
-| BLE Sensor | Checkbox to enable/disable BLE sensor data collection |
+When connected, the BLE device MAC is persisted in `bleSavedMac` for automatic reconnection on the next boot cycle.
 
-Both sources can be enabled simultaneously.
+#### 3.2.4 Data Sources
 
-#### File Intervals
+| Field | NVS Key | Input Type | Default |
+|-------|---------|------------|---------|
+| Modbus RS485 | `srcModbus` | Checkbox | Enabled |
+| BLE Sensor | `srcBle` | Checkbox | Disabled |
 
-| Field | Description |
-|---|---|
-| Data save interval | Number input, 1--1440 minutes (default: 10) |
+These toggles control which sensor interfaces are active during the data collection state.
 
-Controls how often sensor data is written to the daily CSV file.
+#### 3.2.5 File Intervals
 
-#### InfluxDB v2
+| Field | NVS Key | Input Type | Range |
+|-------|---------|------------|-------|
+| New data file every (minutes) | `fileInterval` | Number | 1--1440 |
 
-| Field | Description |
-|---|---|
-| Enable InfluxDB | Checkbox to enable/disable InfluxDB uploads |
-| Host / IP | InfluxDB server address |
-| Port | InfluxDB server port (default: 8086) |
-| API Token | InfluxDB v2 authentication token |
-| Organization | InfluxDB organization |
-| Bucket | InfluxDB bucket name |
+Controls the rotation period for daily CSV files. At the configured interval, a new date-stamped CSV file is created.
 
-Displays the timestamp of the last successful sync. Actions: **Save**, **Test Server**.
+#### 3.2.6 InfluxDB v2
 
-#### NTP Sync
+| Field | NVS Key | Input Type | Default |
+|-------|---------|------------|---------|
+| Enable InfluxDB | `influxEn` | Checkbox | Disabled |
+| Host / IP | `influxHost` | Text | `"119.59.103.220"` |
+| Port | `influxPort` | Number | `8086` |
+| API Token | `influxToken` | Text | *(compile-time default)* |
+| Organization | `influxOrg` | Text | `"Pamiang"` |
+| Bucket | `influxBucket` | Text | `"Srisaket_Station_I"` |
 
-| Field | Description |
-|---|---|
-| Sync time on GSM connect | Checkbox to enable/disable NTP time synchronization |
+Action: **Test Server** (TCP connect test from the AP WiFi interface to the configured host/port).
 
-When enabled, the device syncs its clock from NTP each time the GSM connection is established.
+#### 3.2.7 NTP Sync
 
-#### Internal Memory
+| Field | NVS Key | Input Type | Default |
+|-------|---------|------------|---------|
+| Sync time on GSM connect | `ntpEnable` | Checkbox | Enabled |
 
-| Field | Description |
-|---|---|
-| Rollover threshold | Slider, 10--90% (default: 80%) |
-| Enable rollover | Checkbox to enable automatic storage management |
+When enabled, the station syncs its RTC via NTP (`pool.ntp.org`) or GSM network time during the `STATE_NTP` phase.
 
-Displays a usage bar showing current LittleFS usage. When rollover is enabled and storage exceeds the threshold, the current daily CSV is deleted and recreated with only the most recent data row preserved.
+The **Sync Now** button (visible when a BLE NUS sniffer is connected) allows overriding the station clock from the BLE device's timestamp.
 
-#### MQTT
+#### 3.2.8 Internal Memory
 
-| Field | Description |
-|---|---|
-| Enable MQTT | Checkbox to enable/disable MQTT publishing |
-| Host / IP | MQTT broker address |
-| Port | MQTT broker port (default: 1883) |
-| Username | MQTT authentication username |
-| Password | MQTT authentication password (blank = unchanged) |
+| Field | NVS Key | Input Type | Range |
+|-------|---------|------------|-------|
+| Rollover at (%) | `memRollover` | Range slider | 10--90 |
+| Enable rollover | `memRolloverEn` | Checkbox | Enabled |
 
-Actions: **Save**, **Test Server**.
+When LittleFS usage exceeds the configured percentage, the current data file is deleted and recreated with only the last data row preserved as a header anchor. The memory bar is color-coded: green (< 60%), yellow (60--80%), red (> 80%).
 
-#### Email / Gmail Alarm
+#### 3.2.9 MQTT
 
-| Field | Description |
-|---|---|
-| Enable email notifications | Checkbox to enable/disable email alerts |
-| Gmail Address (sender) | Sender email address |
-| Gmail App Password | Sender email app password |
-| Primary Recipient | Default email recipient |
-| Notify every (hours) | Email frequency, 1--168 hours |
-| Lightning Report Recipient | Optional recipient for lightning alerts |
-| Login attempt alarm | Send email on failed web portal login attempts |
+| Field | NVS Key | Input Type | Default |
+|-------|---------|------------|---------|
+| Enable MQTT | `mqttEnable` | Checkbox | Enabled |
+| Host / IP | `mqttHost` | Text | `"119.59.103.220"` |
+| Port | `mqttPort` | Number | `1883` |
+| Username | `mqttUser` | Text | `"kmutt"` |
+| Password | `mqttPass` | Password | *(unchanged if blank)* |
 
-Actions: **Save Email**, **Test Email** (sends a test message via GSM).
+Password is only written to NVS when a non-empty value is submitted. After saving, the MQTT client configuration is updated at runtime immediately without requiring a reboot.
 
-#### Change Password
+Action: **Test Server** (TCP connect test).
 
-| Field | Description |
-|---|---|
-| New Password | Minimum 4 characters |
-| Confirm Password | Must match new password |
+#### 3.2.10 Email / Gmail Alarm
 
-Changes the web portal login password immediately. The username is fixed as `admin`.
+| Field | NVS Key | Input Type | Default |
+|-------|---------|------------|---------|
+| Enable email | `emailEnable` | Checkbox | Disabled |
+| Gmail Address (sender) | `emailuser` | Email | `""` |
+| Gmail App Password | `emailpass` | Password | *(unchanged if blank)* |
+| Primary Recipient | `emailto` | Email | `""` |
+| Notify every (hours) | `emailFreqH` | Number | `24` (range 1--168) |
+| Lightning Report Recipient | `emaillightto` | Email | `""` |
+| Login attempt alarm | `emailalarm` | Checkbox | Disabled |
+
+When a Gmail app password is provided, the SMTP server is automatically set to `smtp.gmail.com` on port 587.
+
+Action: **Test Email** (sends a test email via the GSM/SIM800 modem).
+
+#### 3.2.11 Change Password
+
+| Field | Input Type | Validation |
+|-------|------------|------------|
+| New Password | Password | Min 4 characters |
+| Confirm Password | Password | Must match |
+
+Updates the `webpass` NVS key. The username `admin` is fixed and cannot be changed.
 
 ---
 
 ## 4. OTA Update Process
 
-The firmware supports Over-The-Air updates downloaded via the GSM connection. This allows remote firmware deployment without physical access to the device.
+The firmware supports two OTA update mechanisms: remote OTA via GSM HTTP and local ArduinoOTA via WiFi.
 
-### Trigger Methods
+### 4.1 Remote OTA via GSM (Primary)
 
-**Automatic -- on boot**
+Remote OTA uses an HTTP-based protocol to download new firmware over the GPRS connection.
 
-If the NVS key `otaboot` is `true`, the firmware checks the OTA server on every boot.
+#### Server Requirements
 
-**Automatic -- periodic**
+The OTA server must implement the following HTTP endpoints:
 
-If `otainterval` is non-zero, the firmware checks the OTA server at the configured hour interval (default: 24 hours).
+**GET /update** -- Check for new firmware.
 
-**Manual -- web portal**
+Request headers sent by the device:
 
-Navigate to Settings -- OTA Update section, then click **Update Now**. This triggers an immediate OTA check via GSM.
+| Header | Value | Source |
+|--------|-------|--------|
+| `Host` | OTA server host | from `otaserver` |
+| `x-ESP32-version` | Current firmware version (e.g., `2.3.5`) | `FIRMWARE_VERSION` |
+| `x-ESP32-device` | Device type (e.g., `All-in-One`) | `otadevice` |
+| `x-ESP32-project` | Project name | `otaproject` |
+| `x-ESP32-password` | Download password (if set) | `otadlpass` |
 
-### OTA Server Protocol
+Expected server response codes:
 
-The OTA server must host firmware at the `/update` endpoint. The device sends an HTTP GET request with the following custom headers:
+| HTTP Code | Meaning |
+|-----------|---------|
+| `200` | New firmware available. Response body is the firmware binary. |
+| `304` | Firmware is up to date. No download. |
+| `401` | Authentication failed (incorrect download password). |
 
+Response headers (when 200):
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Length` | Yes | Firmware binary size in bytes |
+| `x-MD5` | No | MD5 checksum for verification |
+
+#### Firmware Download Process
+
+1. Device connects to GSM/GPRS.
+2. Sends GET `/update` with version/device/project headers.
+3. If server responds `200`, `Update.begin()` is called with the content length.
+4. If `x-MD5` header is present, it is set via `Update.setMD5()`.
+5. Firmware is streamed in 512-byte chunks with a 5-minute total timeout.
+6. Watchdog is fed during download to prevent reset.
+7. On successful `Update.end()`, the `lastota` NVS key is updated and the device reboots.
+8. If download or write fails, the update is aborted and the current firmware continues running.
+
+#### Automatic Check Triggers
+
+- **Boot check**: If `otaboot` is `true`, the check runs once during `STATE_NTP` on every boot cycle.
+- **Periodic check**: If `otainterval` > 0, the check runs when the interval has elapsed since the last check.
+- **Manual trigger**: Via the web portal "Update Now" button. This sets a flag (`otaCheckNow`) that causes the main loop to exit the AP state, initialize GSM, and run the OTA check.
+- **Both disabled**: If `otaboot` is `false` and `otainterval` is 0, no automatic checks occur.
+
+### 4.2 Local ArduinoOTA via WiFi
+
+While the WiFi AP is active, the device also runs an `ArduinoOTA` server for local firmware uploads over WiFi. This uses the PlatformIO OTA upload mechanism.
+
+```bash
+pio run -t upload --upload-port 192.168.4.1
 ```
-GET /update HTTP/1.1
-Host: <server>
-Connection: close
-x-ESP32-version: 2.3.5
-x-ESP32-device: All-in-One
-x-ESP32-project: <project>
-x-ESP32-password: <download_password>
-```
 
-The server responds with one of:
-
-| HTTP Status | Meaning |
-|---|---|
-| `200 OK` | New firmware available. Response body contains the binary. Must include `x-md5` header with the firmware MD5 checksum. |
-| `304 Not Modified` | Firmware is already up to date. |
-| `401 Unauthorized` | Download password is incorrect. |
-
-### Download and Flash Process
-
-1. Device connects to OTA server via GSM TCP socket (mux 1)
-2. Sends HTTP GET with version and device headers
-3. If 200, initializes the ESP32 OTA partition with `Update.begin(contentLen)`
-4. Sets MD5 from the `x-md5` response header
-5. Downloads firmware in 512-byte chunks
-6. Writes each chunk directly to the OTA partition via `Update.write()`
-7. Feeds the watchdog timer during download
-8. After download completes, calls `Update.end(true)` to finalize
-9. Writes the current timestamp to `lastota` NVS key
-10. Reboots into the new firmware
-
-If the download or write fails at any point, the update is aborted and the device continues running the current firmware.
+The ArduinoOTA password is stored in the `otapass` NVS key (default: `"admin"`).
 
 ---
 
 ## 5. MQTT Broker Requirements
 
-The weather station publishes sensor data to an MQTT broker via the GSM connection using the TinyGSM library and PubSubClient.
+### 5.1 Protocol
 
-### Protocol Requirements
+| Parameter | Value |
+|-----------|-------|
+| Protocol | MQTT v3.1.1 |
+| Transport | TCP (unencrypted) |
+| Keep Alive | 90 seconds |
+| Socket Timeout | 45 seconds |
+| Buffer Size | 2048 bytes |
+| Publish Timeout | 60 seconds |
 
-| Requirement | Value |
-|---|---|
-| MQTT version | 3.1.1 |
-| Default port | 1883 (non-TLS, plain TCP) |
-| Authentication | Username/password |
-| Client ID | `PCB_TEST_1` (hardcoded in `utilities.h`) |
+### 5.2 Authentication
 
-### Topic Structure
+The device authenticates with username/password credentials stored in NVS (`mqttUser`, `mqttPass`). The client ID is hardcoded as `MQTT_CLIENT_ID` (`"PCB_TEST_1"`).
 
-The MQTT topic hierarchy follows the pattern `weather/<location>/<station_id>`:
+### 5.3 Topic Structure
 
-```
-weather/Srisaket/Station_1          -- sensor data (compact JSON)
-weather/Srisaket/Station_1/ping     -- heartbeat request from server
-weather/Srisaket/Station_1/pong     -- heartbeat response from device
-```
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `weather/Srisaket/Station_1` | Device -> Broker | Sensor data (JSON payload) |
+| `weather/Srisaket/Station_1/ping` | Broker -> Device | Heartbeat request (reserved) |
+| `weather/Srisaket/Station_1/pong` | Device -> Broker | Heartbeat response |
 
-These topics are defined as macros in `utilities.h`:
+### 5.4 Payload Format
 
-```cpp
-#define MQTT_TOPIC      "weather/Srisaket/Station_1"
-#define MQTT_PING_TOPIC "weather/Srisaket/Station_1/ping"
-#define MQTT_PONG_TOPIC "weather/Srisaket/Station_1/pong"
-```
+#### Heartbeat (pong topic)
 
-### Data Payload Format
-
-Sensor data is published as compact JSON to `MQTT_TOPIC`:
-
-```json
-{
-  "n": 1,
-  "seq": 42,
-  "vt": 3300,
-  "srs": -75,
-  "d": "260526",
-  "r": [
-    [14, 30, 45.5, -3.0, 350, 6.8, 25, 30, 40, 1.2, 180, 75.0, 32.5, 410, 1013.0, 25000, 0.0, 350]
-  ]
-}
-```
-
-Heartbeat (pong) responses are published to `MQTT_PONG_TOPIC`:
+Published once per cycle during GSM initialization:
 
 ```json
 {
   "n": 0,
   "alive": 1,
-  "vt": 3300,
-  "heap": 45000,
-  "uptime": 120,
-  "gsm_rssi": -75,
+  "vt": 3245,
+  "heap": 45200,
+  "uptime": 125000,
+  "gsm_rssi": 15,
   "fw": "2.3.5"
 }
 ```
 
-### Broker Configuration
+| Field | Type | Description |
+|-------|------|-------------|
+| `n` | int | Message type (0 = heartbeat) |
+| `alive` | int | Always 1 |
+| `vt` | int | Battery voltage in mV |
+| `heap` | int | Free heap memory in bytes |
+| `uptime` | int | Milliseconds since boot |
+| `gsm_rssi` | int | GSM signal quality (dBm) |
+| `fw` | string | Firmware version |
 
-Ensure the MQTT broker:
+#### Sensor Data (data topic)
 
-- Accepts connections on port 1883 (or the port configured in NVS)
-- Has user accounts created matching `mqttUser` / `mqttPass`
-- Permits publish and subscribe on the `weather/#` topic hierarchy
-- Has sufficient message size limits (sensor payloads can exceed 1 KB with multiple records)
+The `buildCompactJSON()` function produces a payload with the following structure:
+
+```json
+{
+  "n": 1,
+  "seq": 42,
+  "vt": 3245,
+  "srs": 15,
+  "d": "260526",
+  "r": [
+    {
+      "d": "260526",
+      "t": "0830",
+      "sh": 450,
+      "st": 258,
+      "se": 320,
+      "ph": 65,
+      "sn": 120,
+      "sp": 45,
+      "sk": 180,
+      "ws": 15,
+      "wd": 270,
+      "ah": 780,
+      "at": 295,
+      "co2": 420,
+      "pr": 1013,
+      "il": 35000,
+      "rf": 20,
+      "so": 450
+    }
+  ],
+  "sniffer": {
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "name": "SnifferPortal",
+    "ts": "2026-05-26 08:30:00",
+    "temp": "28.5",
+    "hum": "75.2",
+    "tmp117": "27.8",
+    "delta": "0.7",
+    "rain": "0.0",
+    "leaf": "0",
+    "par": "350",
+    "soil": "42.5"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `n` | int | Message type (1 = sensor data) |
+| `seq` | int | Monotonically increasing sequence number |
+| `vt` | int | Battery voltage (mV) |
+| `srs` | int | GSM signal quality |
+| `d` | string | Date as `DDMMYY` |
+| `r[]` | array | Array of sensor readings |
+| `r[].d` | string | Reading date `DDMMYY` |
+| `r[].t` | string | Reading time `HHMM` |
+| `r[].sh` | int | Soil humidity (raw, divide by 10 for %) |
+| `r[].st` | int | Soil temperature (raw, divide by 10 for deg C) |
+| `r[].se` | int | Soil EC (uS/cm) |
+| `r[].ph` | int | Soil pH (raw, divide by 10) |
+| `r[].sn` | int | Soil nitrogen (mg/kg) |
+| `r[].sp` | int | Soil phosphorus (mg/kg) |
+| `r[].sk` | int | Soil potassium (mg/kg) |
+| `r[].ws` | int | Wind speed (raw, divide by 10 for m/s) |
+| `r[].wd` | int | Wind direction (degrees) |
+| `r[].ah` | int | Air humidity (raw, divide by 10 for %) |
+| `r[].at` | int | Air temperature (raw, divide by 10 for deg C) |
+| `r[].co2` | int | CO2 concentration (ppm) |
+| `r[].pr` | int | Atmospheric pressure (raw, divide by 10 for kPa) |
+| `r[].il` | int | Illuminance (lux) |
+| `r[].rf` | int | Rainfall (raw, divide by 10 for mm) |
+| `r[].so` | int | Solar radiation (W/m2) |
+| `sniffer` | object | Optional; present only when BLE NUS device is connected |
+| `sniffer.mac` | string | BLE sniffer MAC address |
+| `sniffer.name` | string | BLE sniffer device name |
+
+Messages are published with `retain = false`.
 
 ---
 
 ## 6. InfluxDB v2 Requirements
 
-The station writes sensor data directly to InfluxDB v2 via its HTTP API using the GSM modem's TCP connection.
+### 6.1 Prerequisites
 
-### Server Requirements
+- InfluxDB v2 server accessible from the GSM network.
+- An API token with write permission to the target organization and bucket.
+- A bucket created for the station data (default: `Srisaket_Station_I`).
 
-| Requirement | Detail |
-|---|---|
-| API endpoint | `/api/v2/write` |
-| Precision | Millisecond (`precision=ms` query parameter) |
-| Authentication | `Authorization: Token <token>` header |
-| Content type | `text/plain; charset=utf-8` |
-| HTTP method | POST |
-
-### Write URL
+### 6.2 API Endpoint
 
 ```
 POST /api/v2/write?org=<org>&bucket=<bucket>&precision=ms HTTP/1.1
 Host: <host>
 Authorization: Token <token>
 Content-Type: text/plain; charset=utf-8
-Content-Length: <len>
 Connection: close
+Content-Length: <length>
 ```
 
-### Line Protocol Format
+Organization and bucket names are URL-encoded (spaces replaced with `%20`).
 
-The station uses InfluxDB line protocol with the following measurements:
+### 6.3 Line Protocol Format
 
-**`weather_station` measurement** -- RS485 sensor data:
-
-```
-weather_station,station=Srisaket soil_humi=45.5,soil_temp=-3.0,soil_ec=350,soil_ph=6.8,soil_N=25,soil_P=30,soil_K=40,wind_speed=1.2,wind_dir=180,air_humi=75.0,air_temp=32.5,co2=410,pressure=1013.0,illuminance=25000,rainfall=0.0,solar=350,battery=3.30,gsm_rssi=-75
-```
-
-**`sniffer_watchdog` measurement** -- BLE sniffer data (appended when a BLE NUS device is connected):
+#### weather_station Measurement
 
 ```
-sniffer_watchdog,station=Srisaket,mac=AA:BB:CC:DD:EE:FF temp=25.3,hum=65.2,tmp117=24.8,delta=0.5,rain=0,leaf=2.1,par=450,soil=35.6
+weather_station,station=Srisaket soil_humi=45.0,soil_temp=25.8,soil_ec=320,soil_ph=6.5,soil_N=120,soil_P=45,soil_K=180,wind_speed=1.5,wind_dir=270,air_humi=78.0,air_temp=29.5,co2=420,pressure=101.3,illuminance=35000,rainfall=2.0,solar=450,battery=3.245,gsm_rssi=15
 ```
 
-### Prerequisites
+| Tag | Value |
+|-----|-------|
+| `station` | `Srisaket` |
 
-Before enabling InfluxDB uploads:
+| Field | Unit | Description |
+|-------|------|-------------|
+| `soil_humi` | % | Soil moisture |
+| `soil_temp` | deg C | Soil temperature |
+| `soil_ec` | uS/cm | Electrical conductivity |
+| `soil_ph` | pH | Soil pH |
+| `soil_N` | mg/kg | Nitrogen |
+| `soil_P` | mg/kg | Phosphorus |
+| `soil_K` | mg/kg | Potassium |
+| `wind_speed` | m/s | Wind speed |
+| `wind_dir` | degrees | Wind direction |
+| `air_humi` | % | Air humidity |
+| `air_temp` | deg C | Air temperature |
+| `co2` | ppm | CO2 concentration |
+| `pressure` | kPa | Atmospheric pressure |
+| `illuminance` | lux | Light intensity |
+| `rainfall` | mm | Rainfall |
+| `solar` | W/m2 | Solar radiation |
+| `battery` | V | Battery voltage |
+| `gsm_rssi` | dBm | GSM signal strength |
 
-1. The InfluxDB v2 server must be running and accessible from the GSM network
-2. The organization must be created in InfluxDB
-3. The bucket must be created under that organization
-4. An API token with write permissions to the target bucket must be generated
-5. Configure `influxHost`, `influxPort`, `influxToken`, `influxOrg`, and `influxBucket` in the web portal
+#### sniffer_watchdog Measurement (BLE NUS)
 
-### Connection Behavior
+When a BLE NUS sniffer device is connected, an additional measurement is appended:
 
-The station makes up to 3 TCP connection attempts per write cycle. If all attempts fail, the write is skipped and the station continues normal operation. Successful write timestamps are stored in the `influxLastSync` NVS key.
+```
+sniffer_watchdog,station=Srisaket,mac=AA:BB:CC:DD:EE:FF temp=28.5,hum=75.2,tmp117=27.8,delta=0.7,rain=0.0,leaf=0,par=350,soil=42.5
+```
+
+### 6.4 Transmission
+
+Data is sent over a raw TCP connection using `TinyGsmClient`. The connection is attempted up to 3 times with 2-second delays between retries. The response is parsed for an HTTP status code: `204` indicates success, `4xx`/`5xx` indicates an error.
 
 ---
 
 ## 7. Email SMTP Requirements
 
-The station sends email notifications via the SIM800L modem's built-in SMTP client using AT commands.
+Email is sent via the SIM800 modem's built-in AT command email extensions. The SIM800 must support the `+SMTP*` command set.
 
-### SMTP Server Requirements
+### 7.1 Server Configuration
 
-| Requirement | Detail |
-|---|---|
-| Protocol | SMTP with AUTH LOGIN |
-| Default port | 587 |
-| Authentication | Username/password |
-| TLS/SSL | Handled by SIM800L modem firmware (if supported) |
+| Parameter | Default | NVS Key |
+|-----------|---------|---------|
+| SMTP Server | `smtp.gmail.com` | `emailsmtp` |
+| SMTP Port | `587` | `emailport` |
+| Username | *(user Gmail address)* | `emailuser` |
+| Password | *(Gmail app password)* | `emailpass` |
+| Sender Name | `"WeatherStation"` | hardcoded |
 
-### AT Command Flow
+Gmail users must generate an app-specific password (standard Google account requirement for non-OAuth SMTP).
 
-The email sending process uses the following SIM800 AT commands:
+### 7.2 AT Command Sequence
 
-1. `AT+EMAILCID=1` -- Bind email to GPRS context
-2. `AT+EMAILTO=30` -- Set email timeout to 30 seconds
-3. `AT+SMTPSRV="<server>",<port>` -- Configure SMTP server
-4. `AT+SMTPAUTH=1,"<user>","<pass>"` -- Set authentication credentials
-5. `AT+SMTPFROM="<user>","WeatherStation"` -- Set sender
-6. `AT+SMTPRCPT=0,0,"<to>","Recipient"` -- Set recipient
-7. `AT+SMTPSUBJECT="<subject>"` -- Set subject line
-8. `AT+SMTPBODY=<length>` -- Initialize body, then stream content
-9. `AT+SMTPSEND` -- Send the email
+The `sendEmail()` method in `GsmHandler.cpp` executes the following AT command sequence:
 
-### Email Triggers
+```
+AT+EMAILCID=1                    -- Use GPRS context 1
+AT+EMAILTO=30                    -- 30-second timeout
+AT+SMTPSRV="smtp.gmail.com",587  -- Set SMTP server and port
+AT+SMTPAUTH=1,"user","pass"      -- Enable SMTP authentication
+AT+SMTPFROM="user","WeatherStation"  -- Set sender
+AT+SMTPRCPT=0,0,"recipient","Recipient"  -- Add recipient
+AT+SMTPSUBJECT="subject"         -- Set email subject
+AT+SMTPBODY=<length>             -- Declare body length, enter data mode
+<body text>                      -- Send body content
+AT+SMTPSEND                      -- Trigger send
+```
 
-The station sends emails in these scenarios:
+The device waits up to 30 seconds for `+SMTPSEND: 1` (success). If the response is not received, the send is considered failed.
 
-- **Periodic data reports** -- At the configured `emailFreqH` interval (default: 24 hours)
-- **Lightning alerts** -- To the `emaillightto` recipient (if configured)
-- **Login alarm** -- Failed web portal login attempts trigger an email to the primary recipient (if `emailalarm` is `true`)
+### 7.3 Email Alarm
 
-### Gmail Configuration
-
-For Gmail users, the web portal automatically sets:
-
-- SMTP server: `smtp.gmail.com`
-- SMTP port: `587`
-- Authentication: Gmail address + App Password (not the account password)
-
-You must generate a Gmail App Password at `https://myaccount.google.com/apppasswords` before configuring email.
+When `emailalarm` is enabled and a failed web portal login attempt occurs, the device automatically sends an email containing the attempted username, client IP address, and timestamp. This email is sent immediately via the GSM modem during the login request handling.
 
 ---
 
 ## 8. File System Structure
 
-The station uses LittleFS on the ESP32-C3 flash for persistent data storage. The partition scheme is defined in `partitions_ota_4mb.csv`.
+### 8.1 Partition Layout
 
-### Directory Layout
+The flash is divided according to `partitions_ota_4mb.csv`:
+
+| Partition | Type | Offset | Size | Purpose |
+|-----------|------|--------|------|---------|
+| `nvs` | data/nvs | 0x9000 | 20 KB | Non-volatile configuration |
+| `otadata` | data/ota | 0xe000 | 8 KB | OTA slot selection |
+| `app0` | app/ota_0 | 0x10000 | 1.625 MB | Firmware slot A |
+| `app1` | app/ota_1 | 0x1B0000 | 1.625 MB | Firmware slot B |
+| `spiffs` | data/spiffs | 0x350000 | 720 KB | LittleFS data storage |
+
+### 8.2 LittleFS Directory Layout
 
 ```
 /
-├── DD-MM-YYYY.csv            Daily Modbus RS485 sensor data
-├── BLE-DD-MM-YYYY.csv        Daily BLE sensor data (from connected BLE devices)
-├── Event-DD-MM-YYYY.csv      Daily event log
-├── /DATA_TEMP_SWAP.csv       Temporary file for CSV row removal (auto-managed)
-└── /DATA_CLEAR_SWAP.csv      Temporary file for CSV data clearing (auto-managed)
+├── DATA.csv                       # Legacy/initial data file
+├── DD-MM-YYYY.csv                 # Daily sensor data files (e.g., 26-05-2026.csv)
+├── BLE-DD-MM-YYYY.csv             # Daily BLE sensor data files (e.g., BLE-26-05-2026.csv)
+├── BLE-data.csv                   # Fallback BLE data (when date unavailable)
+├── Event-DD-MM-YYYY.csv           # Daily event log files
+├── DATA_TEMP_SWAP.csv             # Temporary swap file during line removal
+└── DATA_CLEAR_SWAP.csv            # Temporary swap file during data clearing
 ```
 
-### File Naming Convention
+### 8.3 Storage Management
 
-- **Sensor data**: `/<DD>-<MM>-<YYYY>.csv` (e.g., `/26-05-2026.csv`)
-- **BLE data**: `/BLE-<DD>-<MM>-<YYYY>.csv` (e.g., `/BLE-26-05-2026.csv`)
-- **Event logs**: `/Event-<DD>-<MM>-<YYYY>.csv` (e.g., `/Event-26-05-2026.csv`)
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Minimum free space | 10,000 bytes | `saveData()` refuses to write if below this |
+| Maximum single file | 500 KB | Warning logged if exceeded |
+| Rollover threshold | 80% (configurable) | Triggers file deletion and recreation |
+| Rollover behavior | Keep last row | Last data row is preserved as anchor after rollover |
 
-Date values in filenames are zero-padded (e.g., `05` for May, `03` for the 3rd).
-
-### Storage Management
-
-- **Minimum free space**: 10,000 bytes (defined as `MIN_FREE_SPACE_BYTES`)
-- **Maximum file size**: 500 KB per file (defined as `MAX_FILE_SIZE_BYTES`)
-- **Rollover threshold**: Default 80% of total LittleFS capacity
-
-When rollover is enabled and storage usage exceeds the threshold:
-
-1. The last data line from the current daily CSV is preserved
-2. The daily CSV file is deleted
-3. A new daily CSV is created with the header row and the preserved last line
-4. This ensures continuity of data while freeing storage space
-
-### File Creation
-
-New daily CSV files are created automatically at the start of each day (when the date changes) or when the firmware starts and the current day's file does not exist. Each file begins with a header row followed by data rows.
+The rollover mechanism deletes the current daily CSV, creates a new file with the standard header, and appends the last row from the deleted file.
 
 ---
 
 ## 9. CSV File Formats
 
-All CSV files use CRLF (`\r\n`) line endings and are encoded in UTF-8.
+### 9.1 Sensor Data CSV
 
-### Sensor Data CSV
+**Filename pattern:** `DD-MM-YYYY.csv` (e.g., `26-05-2026.csv`), or `DATA.csv` as fallback.
 
-**Filename**: `/<DD>-<MM>-<YYYY>.csv`
-
-**Header**:
+**Header row:**
 ```csv
 Date,Time,Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,WindSpeed,WindDirection,Air_Humidity,Air_Temperature,CO2,Pressure,Illuminance,Rainfall,Solar
 ```
 
-**Data row example**:
+**Data row format:**
 ```csv
-26/05/2026,14:30:00,45.5,-3.0,350,6.8,25,30,40,1.2,180,75.0,32.5,410,1013.0,25000,0.0,350
+DD/MM/YYYY,HH:MM:SS,<sh>,<st>,<ec>,<ph>,<N>,<P>,<K>,<ws>,<wd>,<ah>,<at>,<co2>,<pr>,<il>,<rf>,<so>
 ```
 
-**Field reference**:
+**Example:**
+```csv
+Date,Time,Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,WindSpeed,WindDirection,Air_Humidity,Air_Temperature,CO2,Pressure,Illuminance,Rainfall,Solar
+26/05/2026,08:30:00,45.0,25.8,320,6.5,120,45,180,1.5,270,78.0,29.5,420,101.3,35000,2.0,450
+26/05/2026,08:40:00,44.5,25.9,315,6.4,118,44,175,1.8,275,77.5,29.7,415,101.2,35500,2.1,460
+```
 
-| Column | Unit | Format | Source |
-|---|---|---|---|
-| Date | DD/MM/YYYY | String | System clock (NTP or incremental) |
-| Time | HH:MM:SS | String | System clock |
-| Soil_Humidity | % | Float (1 decimal) | Soil sensor, Modbus register 0 |
-| Soil_Temperature | degrees C | Float (1 decimal, can be negative) | Soil sensor, Modbus register 1 |
-| EC | uS/cm | Integer | Soil sensor, Modbus register 2 |
-| PH | pH | Float (1 decimal) | Soil sensor, Modbus register 3 |
-| N | mg/kg | Integer | Soil sensor, Modbus register 4 |
-| P | mg/kg | Integer | Soil sensor, Modbus register 5 |
-| K | mg/kg | Integer | Soil sensor, Modbus register 6 |
-| WindSpeed | m/s | Float (1 decimal) | Weather sensor, Modbus |
-| WindDirection | degrees | Integer (0--360) | Weather sensor, Modbus |
-| Air_Humidity | %RH | Float (1 decimal) | Weather sensor, Modbus |
-| Air_Temperature | degrees C | Float (1 decimal) | Weather sensor, Modbus |
-| CO2 | ppm | Integer | Weather sensor, Modbus |
-| Pressure | hPa | Float (1 decimal) | Weather sensor, Modbus |
-| Illuminance | lux | Integer | Weather sensor, Modbus |
-| Rainfall | mm | Float (1 decimal) | Weather sensor, Modbus |
-| Solar | W/m2 | Integer | Weather sensor, Modbus |
+**Column reference:**
 
-### BLE Data CSV
+| Column | Format | Unit | Notes |
+|--------|--------|------|-------|
+| Date | `DD/MM/YYYY` | -- | Zero-padded |
+| Time | `HH:MM:SS` | -- | 24-hour, zero-padded |
+| Soil_Humidity | `float` | % | One decimal place |
+| Soil_Temperature | `float` | deg C | One decimal place, can be negative |
+| EC | `int` | uS/cm | Electrical conductivity |
+| PH | `float` | pH | One decimal place |
+| N | `int` | mg/kg | Nitrogen |
+| P | `int` | mg/kg | Phosphorus |
+| K | `int` | mg/kg | Potassium |
+| WindSpeed | `float` | m/s | One decimal place |
+| WindDirection | `int` | degrees | 0--359 |
+| Air_Humidity | `float` | % | One decimal place |
+| Air_Temperature | `float` | deg C | One decimal place, can be negative |
+| CO2 | `int` | ppm | CO2 concentration |
+| Pressure | `float` | kPa | One decimal place |
+| Illuminance | `int` | lux | Light intensity |
+| Rainfall | `float` | mm | One decimal place |
+| Solar | `int` | W/m2 | Solar radiation |
 
-**Filename**: `/BLE-<DD>-<MM>-<YYYY>.csv`
+Lines are terminated with `\r\n`.
 
-**Header**:
+### 9.2 BLE Sensor Data CSV
+
+**Filename pattern:** `BLE-DD-MM-YYYY.csv` (e.g., `BLE-26-05-2026.csv`), or `BLE-data.csv` as fallback.
+
+**Header row:**
 ```csv
 Date,Time,Temperature(C),Humidity(%),TMP117(C),DeltaT(C),Rainfall,LeafWetness,PAR,SoilMoisture
 ```
 
-**Data row example**:
+**Example:**
 ```csv
-26/05/2026,14:30:00,25.3,65.2,24.8,0.5,0,2.1,450,35.6
+Date,Time,Temperature(C),Humidity(%),TMP117(C),DeltaT(C),Rainfall,LeafWetness,PAR,SoilMoisture
+26/05/2026,08:30:15,28.5,75.2,27.8,0.7,0.0,0,350,42.5
+26/05/2026,08:40:22,28.7,74.8,27.9,0.8,0.0,0,355,42.3
 ```
 
-**Field reference**:
+**Column reference:**
 
-| Column | Unit | Description |
-|---|---|---|
-| Date | DD/MM/YYYY | Date parsed from BLE JSON timestamp |
-| Time | HH:MM:SS | Time parsed from BLE JSON timestamp |
-| Temperature(C) | degrees C | Air temperature from BLE sensor |
-| Humidity(%) | %RH | Relative humidity from BLE sensor |
-| TMP117(C) | degrees C | Precision temperature from TMP117 sensor |
-| DeltaT(C) | degrees C | Temperature delta (air - surface) |
-| Rainfall | mm | Rainfall measurement from BLE device |
-| LeafWetness | unitless | Leaf wetness index from BLE device |
-| PAR | umol/m2/s | Photosynthetically Active Radiation |
-| SoilMoisture | % | Soil moisture from BLE device |
+| Column | Format | Source Key | Description |
+|--------|--------|------------|-------------|
+| Date | `DD/MM/YYYY` | `ts` | Parsed from `YYYY-MM-DD` timestamp |
+| Time | `HH:MM:SS` | `ts` | Parsed from timestamp |
+| Temperature(C) | `float` | `temp` | Air temperature from BLE sensor |
+| Humidity(%) | `float` | `hum` | Relative humidity from BLE sensor |
+| TMP117(C) | `float` | `tmp117` | TMP117 precision temperature |
+| DeltaT(C) | `float` | `delta` | Temperature delta (air - leaf) |
+| Rainfall | `float` | `rain` | Rainfall measurement |
+| LeafWetness | `int` | `leaf` | Leaf wetness index |
+| PAR | `int` | `par` | Photosynthetically Active Radiation |
+| SoilMoisture | `float` | `soil` | Soil moisture from BLE sensor |
 
-BLE data is received as JSON via the Nordic UART Service (NUS) and parsed into CSV rows. Duplicate timestamps are detected and skipped to prevent data duplication.
+Duplicate timestamps are detected and skipped to prevent repeated entries from NUS notifications.
 
-### Event Log CSV
+### 9.3 Event Log CSV
 
-**Filename**: `/Event-<DD>-<MM>-<YYYY>.csv`
+**Filename pattern:** `Event-DD-MM-YYYY.csv` (e.g., `Event-26-05-2026.csv`).
 
-Event logs are auto-generated by the web portal and firmware. Each entry contains a timestamp followed by a description of the event. Events include:
-
-- Web portal logins (success and failure)
-- Settings changes (which section was modified)
-- File operations (delete, download)
-- BLE events (scan, connect, disconnect, data received)
-- OTA events (check, update, error)
-- System events (boot, GSM connect, NTP sync)
-
-Event log entries follow this format:
-
+**Header row:**
 ```csv
-26/05/2026,14:30:00,Login SUCCESS user=admin ip=192.168.4.2
-26/05/2026,14:32:00,OTA settings updated
-26/05/2026,14:35:00,BLE connect request: AA:BB:CC:DD:EE:FF
+DateTime,Event
 ```
+
+**Example:**
+```csv
+DateTime,Event
+26/05/2026 08:25:00,Login SUCCESS user=admin ip=192.168.4.2
+26/05/2026 08:25:15,BLE Client settings updated
+26/05/2026 08:26:30,OTA settings updated
+26/05/2026 08:30:00,OTA update requested via web portal
+26/05/2026 08:35:00,Login FAILED user=root ip=192.168.4.5
+26/05/2026 08:35:05,Email alarm sent
+```
+
+**Event types logged:**
+
+| Event | Trigger |
+|-------|---------|
+| `Login SUCCESS user=X ip=Y` | Successful web portal login |
+| `Login FAILED user=X ip=Y` | Failed web portal login |
+| `Email alarm sent` | Alarm email dispatched after failed login |
+| `User logout` | Web portal logout |
+| `BLE Client settings updated` | BLE enable/disable saved |
+| `BLE connect request: <MAC>` | BLE connection initiated |
+| `BLE disconnected` | BLE device disconnected |
+| `BLE forget saved device` | Saved MAC cleared |
+| `Data sources updated` | Modbus/BLE source toggles changed |
+| `File intervals updated` | File rotation interval changed |
+| `InfluxDB settings updated` | InfluxDB configuration changed |
+| `NTP settings updated` | NTP toggle changed |
+| `NTP synced from BLE` | Time overridden from BLE NUS device |
+| `Memory settings updated` | Rollover threshold changed |
+| `MQTT settings updated` | MQTT configuration changed |
+| `Email settings updated` | Email configuration changed |
+| `OTA settings updated` | OTA configuration changed |
+| `OTA update requested via web portal` | Manual OTA trigger |
+| `Password changed` | Web portal password updated |
+| `AP timeout updated` | WiFi AP timeout changed |
+| `Delete file <path>` | Data file deleted via portal |
+| `Delete ALL data files` | Bulk file deletion |
+| `Manual reboot via web UI` | Device rebooted from portal |
 
 ---
 
-*This concludes Module 5 -- Configuration & Deployment. Refer to Module 6 for troubleshooting and maintenance procedures.*
+*End of Module 5*
