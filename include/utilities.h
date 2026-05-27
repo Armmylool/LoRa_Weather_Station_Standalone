@@ -90,6 +90,8 @@ static constexpr unsigned long WEB_SESSION_TIMEOUT_MS = 600000UL; /* 10 min */
 #define MQTT_PASSWORD   "kmutt@kmutt"
 #define MQTT_CLIENT_ID  "PCB_TEST_1"
 static constexpr unsigned long MQTT_PUBLISH_TIMEOUT = 60000;
+const uint8_t PUBLISH_BATCH_SIZE  = 6;   /* Min records before batch MQTT publish */
+const uint8_t PUBLISH_MAX_RECORDS = 12;  /* Max records per publish cycle */
 
 /* ===== MEMORY ===== */
 const uint32_t     MIN_FREE_SPACE_BYTES   = 10000;

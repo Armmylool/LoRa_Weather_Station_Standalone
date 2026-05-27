@@ -113,6 +113,8 @@ private:
     void hSetAp();
     void hSetBle();
     void hSetSources();
+    void hSetSoil();
+    void hSetWeather();
     void hSetFile();
     void hSetInflux();
     void hSetNtp();

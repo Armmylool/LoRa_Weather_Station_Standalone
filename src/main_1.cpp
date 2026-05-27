@@ -59,16 +59,34 @@ static unsigned long stateEntryTime = 0;
 static systemState   prevState      = STATE_GSM_INIT;
 
 static char dailyCsv[24] = "/DATA.csv";
+static const char* temporarydata = "/DATA_TEMP.csv";
+static BleSensorData lastBleData = {0, 0, 0, 0, 0, 0, 0, 0};
+static bool lastBleValid = false;
 
 static SystemStatus sysStatus;
 
+/* Runtime config read from NVS (reloaded each cycle) */
+static uint8_t rtSoilSlaveId   = SOIL_SLAVE_ID;
+static uint8_t rtWeathSlaveId  = WEATHER_SLAVE_ID;
+static uint8_t rtPubBatchSize  = PUBLISH_BATCH_SIZE;
+
+static void loadRuntimeConfig() {
+    nvs.begin("ws-cfg", true);
+    rtSoilSlaveId  = nvs.getUChar("soilSlaveId",  SOIL_SLAVE_ID);
+    rtWeathSlaveId = nvs.getUChar("weathSlaveId", WEATHER_SLAVE_ID);
+    rtPubBatchSize = nvs.getUChar("pubBatchSize", PUBLISH_BATCH_SIZE);
+    nvs.end();
+    if (rtPubBatchSize < 1)  rtPubBatchSize = 1;
+    if (rtPubBatchSize > 60) rtPubBatchSize = 60;
+}
+
 /* ===== FORWARD DECLARATIONS ===== */
-void checkFile(const char* fileName);
 bool readLastTimeFromBackup(timeStruct* outTime);
 void incrementTime(timeStruct* t, uint8_t addMinutes);
 void feedWDT();
 void clearWeatherData();
 bool publishHeartbeat();
+bool publishRealData();
 String getLastDataLine(const char* fileName);
 bool buildCompactJSON(DataRecord* records, int count, uint16_t battVoltage, int gsmRssi,
                        char* buffer, size_t bufferSize);
@@ -274,6 +292,20 @@ static void parseNusJson(const char* json) {
     }
     Serial.printf("[BLE] NUS parsed %u fields from: %.80s\n",
                   bleConnDev.charCount, json);
+
+    /* Store parsed BLE values for temp file / MQTT publish */
+    {
+        char v[32];
+        jsonField(json, "temp",   v, sizeof(v)); lastBleData.ble_temp   = (int16_t)(atof(v) * 10);
+        jsonField(json, "hum",    v, sizeof(v)); lastBleData.ble_humi   = (uint16_t)(atof(v) * 10);
+        jsonField(json, "tmp117", v, sizeof(v)); lastBleData.ble_tmp117 = (int16_t)(atof(v) * 10);
+        jsonField(json, "delta",  v, sizeof(v)); lastBleData.ble_delta  = (int16_t)(atof(v) * 10);
+        jsonField(json, "rain",   v, sizeof(v)); lastBleData.ble_rain   = (uint16_t)(atoi(v));
+        jsonField(json, "leaf",   v, sizeof(v)); lastBleData.ble_leaf   = (uint16_t)(atoi(v));
+        jsonField(json, "par",    v, sizeof(v)); lastBleData.ble_par    = (uint16_t)(atoi(v));
+        jsonField(json, "soil",   v, sizeof(v)); lastBleData.ble_soil   = (uint16_t)(atoi(v));
+        lastBleValid = true;
+    }
 
     saveBleDataToCsv(json);
 
@@ -740,6 +772,34 @@ void setup() {
     else Serial.println(F("[FS] LittleFS mounted"));
 
     feedWDT();
+    if (!LittleFS.exists(temporarydata)) {
+        internalMemory.write(LittleFS, temporarydata,
+            "Date,Time,"
+            "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
+            "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
+            "CO2,Pressure,Illuminance,Rainfall,Solar,"
+            "BLE_Temp,BLE_Humi,BLE_TMP117,BLE_DeltaT,BLE_Rain,BLE_Leaf,BLE_PAR,BLE_Soil\r\n");
+    } else {
+        /* Recreate if old header without BLE columns */
+        File tf = LittleFS.open(temporarydata, "r");
+        String hdr = tf.readStringUntil('\n');
+        tf.close();
+        if (hdr.indexOf("BLE_Temp") < 0) {
+            LittleFS.remove(temporarydata);
+            internalMemory.write(LittleFS, temporarydata,
+                "Date,Time,"
+                "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
+                "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
+                "CO2,Pressure,Illuminance,Rainfall,Solar,"
+                "BLE_Temp,BLE_Humi,BLE_TMP117,BLE_DeltaT,BLE_Rain,BLE_Leaf,BLE_PAR,BLE_Soil\r\n");
+            Serial.println(F("[FS] Temp file recreated with BLE columns"));
+        }
+    }
+    delay(100);
+
+    loadRuntimeConfig();
+
+    feedWDT();
     initBLE();
     feedWDT();
 
@@ -798,7 +858,23 @@ void updateDailyCsv() {
             "Date,Time,"
             "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
             "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
-            "CO2,Pressure,Illuminance,Rainfall,Solar\r\n");
+            "CO2,Pressure,Illuminance,Rainfall,Solar,"
+            "BLE_Temp,BLE_Humi,BLE_TMP117,BLE_DeltaT,BLE_Rain,BLE_Leaf,BLE_PAR,BLE_Soil\r\n");
+    } else {
+        /* Migrate: recreate if old header without BLE columns */
+        File df = LittleFS.open(dailyCsv, "r");
+        String hdr = df.readStringUntil('\n');
+        df.close();
+        if (hdr.indexOf("BLE_Temp") < 0) {
+            LittleFS.remove(dailyCsv);
+            internalMemory.write(LittleFS, dailyCsv,
+                "Date,Time,"
+                "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
+                "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
+                "CO2,Pressure,Illuminance,Rainfall,Solar,"
+                "BLE_Temp,BLE_Humi,BLE_TMP117,BLE_DeltaT,BLE_Rain,BLE_Leaf,BLE_PAR,BLE_Soil\r\n");
+            Serial.println(F("[FS] Daily CSV recreated with BLE columns"));
+        }
     }
 }
 
@@ -977,7 +1053,7 @@ void loop() {
             if (gsmAvailable) gsmHandler.mqttLoop();
             if (weatherStateStart == 0) weatherStateStart = millis();
             if (millis() - weatherStateStart < WEATHER_SETTLE_DELAY) { feedWDT(); delay(10); break; }
-            if (modbusSensor.read(WEATHER, WEATHER_SLAVE_ID, WEATHER_REGISTER_ADDR,
+            if (modbusSensor.read(WEATHER, rtWeathSlaveId, WEATHER_REGISTER_ADDR,
                                   WEATHER_REGISTER_LEN, &RS485Serial)) {
                 if (DEBUG) {
                     Serial.println(F("Weather Success!"));
@@ -1004,7 +1080,7 @@ void loop() {
             if (gsmAvailable) gsmHandler.mqttLoop();
             if (soilStateStart == 0) soilStateStart = millis();
             if (millis() - soilStateStart < SOIL_SETTLE_DELAY) { feedWDT(); delay(10); break; }
-            if (modbusSensor.read(SOIL, SOIL_SLAVE_ID, SOIL_REGISTER_ADDR,
+            if (modbusSensor.read(SOIL, rtSoilSlaveId, SOIL_REGISTER_ADDR,
                                   SOIL_REGISTER_LEN, &RS485Serial)) {
              if (DEBUG) {
                     Serial.println(F("Soil Success!"));
@@ -1042,8 +1118,15 @@ void loop() {
                 }
             }
 
-            if (internalMemory.saveData(dailyCsv, &currentTime, &modbusSensor.currentSensor))
+            if (internalMemory.saveData(dailyCsv, &currentTime, &modbusSensor.currentSensor,
+                                         lastBleValid ? &lastBleData : nullptr))
                 Serial.println(F("[SAVE] Daily CSV OK"));
+
+            if (internalMemory.saveData(temporarydata, &currentTime, &modbusSensor.currentSensor,
+                                         lastBleValid ? &lastBleData : nullptr))
+                Serial.println(F("[SAVE] Temp saved"));
+            else
+                Serial.println(F("[SAVE] Temp save FAILED"));
 
             if (gsmAvailable) sendToInfluxDB(&currentTime, &modbusSensor.currentSensor);
 
@@ -1053,12 +1136,68 @@ void loop() {
 
         /* ── RECONNECT ── */
         case STATE_RECONNECT: {
-            currentState = STATE_FINISH;
+            int recordCount = internalMemory.countDataLines(temporarydata);
+            if (recordCount < rtPubBatchSize) {
+                Serial.printf("[RECONNECT] %d records (< %d). Skip publish.\n",
+                              recordCount, rtPubBatchSize);
+                currentState = STATE_FINISH;
+                break;
+            }
+
+            if (gsmAvailable && gsmHandler.isNetworkConnected()) {
+                Serial.println(F("[RECONNECT] GSM still connected."));
+                currentState = STATE_PUBLISH;
+                break;
+            }
+
+            Serial.println(F("[RECONNECT] GSM down. Attempting reconnect..."));
+            unsigned long reconnectStart = millis();
+            gsmHandler.restart();
+
+            while (millis() - reconnectStart < RECONNECT_TIMEOUT) {
+                feedWDT();
+                if (!gsmHandler.init(GSM_SERIAL)) {
+                    Serial.println(F("[RECONNECT] Init failed, retry 5s..."));
+                    delay(5000);
+                    continue;
+                }
+                if (!gsmHandler.connectNetwork()) {
+                    Serial.println(F("[RECONNECT] Network failed, retry 5s..."));
+                    gsmHandler.restart();
+                    delay(5000);
+                    continue;
+                }
+                gsmAvailable = true;
+                gsmRssi = gsmHandler.getSignalQuality();
+                Serial.println(F("[RECONNECT] GSM reconnected!"));
+                currentState = STATE_PUBLISH;
+                break;
+            }
+
+            if (currentState != STATE_PUBLISH) {
+                Serial.println(F("[RECONNECT] Failed. Temp data kept."));
+                gsmAvailable = false;
+                currentState = STATE_FINISH;
+            }
             break;
         }
 
         /* ── PUBLISH ── */
         case STATE_PUBLISH: {
+            int recordCount = internalMemory.countDataLines(temporarydata);
+            Serial.printf("[PUBLISH] Temp records: %d\n", recordCount);
+
+            if (recordCount < rtPubBatchSize) {
+                Serial.println(F("[PUBLISH] Not enough records."));
+                currentState = STATE_FINISH;
+                break;
+            }
+
+            if (publishRealData()) {
+                Serial.println(F("[PUBLISH] Batch published OK."));
+            } else {
+                Serial.println(F("[PUBLISH] Failed. Temp data kept for retry."));
+            }
             currentState = STATE_FINISH;
             break;
         }
@@ -1078,6 +1217,86 @@ void loop() {
 
         default: currentState = STATE_FINISH; break;
     }
+}
+
+/* ===== BATCH MQTT PUBLISH (auto-chunks to fit SIM800L 1024-byte limit) ===== */
+
+static constexpr size_t MQTT_MAX_PAYLOAD = 1450;
+
+bool publishRealData() {
+    int recordCount = internalMemory.countDataLines(temporarydata);
+    Serial.printf("[MQTT] %d records available\n", recordCount);
+
+    if (recordCount < rtPubBatchSize) {
+        Serial.println(F("[MQTT] Not enough records."));
+        return false;
+    }
+
+    int toPublish = (recordCount > PUBLISH_MAX_RECORDS) ? PUBLISH_MAX_RECORDS : recordCount;
+
+    DataRecord records[PUBLISH_MAX_RECORDS];
+    memset(records, 0, sizeof(records));
+    if (!internalMemory.readDataRecords(temporarydata, records, toPublish)) {
+        Serial.println(F("[MQTT] Failed to read temp records"));
+        return false;
+    }
+
+    /* Publish in sub-batches that each fit within SIM800L payload limit */
+    int published = 0;
+    int start = 0;
+
+    while (start < toPublish) {
+        /* Find how many records fit in one payload */
+        int chunkSize = toPublish - start;
+        static char jsonBuf[2048];
+
+        /* Shrink chunk until it fits under the limit */
+        while (chunkSize > 0) {
+            if (!buildCompactJSON(&records[start], chunkSize, batteryVoltage, gsmRssi,
+                                   jsonBuf, sizeof(jsonBuf))) {
+                chunkSize--;
+                continue;
+            }
+            if (strlen(jsonBuf) <= MQTT_MAX_PAYLOAD) break;
+            chunkSize--;
+        }
+
+        if (chunkSize == 0) {
+            Serial.println(F("[MQTT] Single record too large, skipping."));
+            start++;
+            continue;
+        }
+
+        Serial.printf("[MQTT] Chunk: %d records, %u bytes\n", chunkSize, strlen(jsonBuf));
+
+        if (!gsmHandler.mqttConnect()) {
+            Serial.println(F("[MQTT] MQTT connect failed"));
+            break;
+        }
+
+        bool ok = gsmHandler.mqttPublish(MQTT_TOPIC, jsonBuf);
+        gsmHandler.mqttDisconnect();
+
+        if (ok) {
+            published += chunkSize;
+            Serial.printf("[MQTT] Published %d records\n", chunkSize);
+        } else {
+            Serial.println(F("[MQTT] Publish failed. Stopping."));
+            break;
+        }
+
+        start += chunkSize;
+        feedWDT();
+        delay(200);
+    }
+
+    /* Remove all successfully published records from temp file */
+    if (published > 0) {
+        internalMemory.removeFirstDataLines(temporarydata, published);
+        Serial.printf("[MQTT] Total published: %d/%d\n", published, toPublish);
+    }
+
+    return (published > 0);
 }
 
 /* ===== HEARTBEAT ===== */
@@ -1115,47 +1334,29 @@ bool buildCompactJSON(DataRecord* records, int count, uint16_t battVoltage, int 
             "\"sh\":%u,\"st\":%d,\"se\":%u,\"ph\":%u,"
             "\"sn\":%u,\"sp\":%u,\"sk\":%u,"
             "\"ws\":%u,\"wd\":%u,\"ah\":%u,\"at\":%d,"
-            "\"co2\":%u,\"pr\":%u,\"il\":%lu,\"rf\":%u,\"so\":%u}",
+            "\"co2\":%u,\"pr\":%u,\"il\":%lu,\"rf\":%u,\"so\":%u",
             records[i].date, records[i].month, records[i].year % 100,
             records[i].hour, records[i].minute,
             d.soil_humi, d.soil_temp, d.soil_ec, d.soil_ph,
             d.soil_N, d.soil_P, d.soil_K,
             d.windSpeed, d.windDir_Deg, d.air_humidity, d.air_temperature,
             d.CO2, d.pressure, (unsigned long)d.illuminance, d.rainfall, d.solar)) return false;
+
+        /* BLE data from stored record */
+        if (records[i].ble_valid) {
+            const BleSensorData& b = records[i].ble;
+            if (!appendToBuffer(buffer, bufferSize, len,
+                ",\"bt\":%d,\"bh\":%u,\"b117\":%d,\"bd\":%d,"
+                "\"br\":%u,\"blf\":%u,\"bp\":%u,\"bs\":%u",
+                b.ble_temp, b.ble_humi, b.ble_tmp117, b.ble_delta,
+                b.ble_rain, b.ble_leaf, b.ble_par, b.ble_soil)) return false;
+        }
+
+        if (!appendToBuffer(buffer, bufferSize, len, "}")) return false;
         idx++;
     }
-    if (!appendToBuffer(buffer, bufferSize, len, "]")) return false;
 
-    if (bleConnDev.connected && bleConnDev.charCount > 0) {
-        if (bleIsNus) {
-            static const char* nusKeys[] = {
-                "ts","temp","hum","tmp117","delta","rain","leaf","par","soil"
-            };
-            if (!appendToBuffer(buffer, bufferSize, len,
-                ",\"sniffer\":{\"mac\":\"%s\",\"name\":\"%s\"",
-                bleConnDev.mac, bleConnDev.name)) return false;
-            for (uint8_t i = 0; i < bleConnDev.charCount && i < 9; i++) {
-                if (!appendToBuffer(buffer, bufferSize, len,
-                    ",\"%s\":\"%s\"", nusKeys[i],
-                    bleConnDev.chars[i].ascii)) return false;
-            }
-            if (!appendToBuffer(buffer, bufferSize, len, "}")) return false;
-        } else {
-            if (!appendToBuffer(buffer, bufferSize, len,
-                ",\"ble\":{\"mac\":\"%s\",\"name\":\"%s\",\"chars\":[",
-                bleConnDev.mac, bleConnDev.name)) return false;
-            for (uint8_t i = 0; i < bleConnDev.charCount; i++) {
-                if (i > 0 && !appendToBuffer(buffer, bufferSize, len, ",")) return false;
-                if (!appendToBuffer(buffer, bufferSize, len,
-                    "{\"u\":\"%s\",\"v\":\"%s\"}",
-                    bleConnDev.chars[i].uuid,
-                    bleConnDev.chars[i].ascii)) return false;
-            }
-            if (!appendToBuffer(buffer, bufferSize, len, "]}")) return false;
-        }
-    }
-
-    return appendToBuffer(buffer, bufferSize, len, "}");
+    return appendToBuffer(buffer, bufferSize, len, "]}");
 }
 
 /* ===== UTILITIES ===== */
@@ -1239,13 +1440,3 @@ String getLastDataLine(const char* fileName) {
     f.close(); return last;
 }
 
-void checkFile(const char* fileName) {
-    if (!LittleFS.exists(fileName)) {
-        Serial.printf("[FS] Creating %s\n", fileName);
-        internalMemory.write(LittleFS, fileName,
-            "Date,Time,"
-            "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
-            "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
-            "CO2,Pressure,Illuminance,Rainfall,Solar\r\n");
-    }
-}

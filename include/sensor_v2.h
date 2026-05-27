@@ -43,6 +43,18 @@ typedef struct __attribute__((packed)) {
   uint16_t solar;           
 } SensorData;
 
+/* BLE NUS sensor data (from Sniffer Portal) */
+typedef struct __attribute__((packed)) {
+  int16_t  ble_temp;    // temperature * 10
+  uint16_t ble_humi;    // humidity * 10
+  int16_t  ble_tmp117;  // TMP117 * 10
+  int16_t  ble_delta;   // DeltaT * 10
+  uint16_t ble_rain;
+  uint16_t ble_leaf;
+  uint16_t ble_par;
+  uint16_t ble_soil;
+} BleSensorData;
+
 typedef struct __attribute__((packed)) {
   uint8_t date;
   uint8_t month;
@@ -50,7 +62,9 @@ typedef struct __attribute__((packed)) {
   uint8_t hour;
   uint8_t minute;
   SensorData data;
-  uint8_t valid;      
+  BleSensorData ble;
+  uint8_t ble_valid;     // 1 if BLE data present
+  uint8_t valid;
 } DataRecord;
 
 typedef SensorData soilData;

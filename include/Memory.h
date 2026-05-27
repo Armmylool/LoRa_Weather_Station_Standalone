@@ -13,8 +13,9 @@ class Memory {
     /** @brief Insert the data to the path file. */
     bool append(fs::FS &fs, const char * path, const char * message);
     
-    /** @brief Save sensor data to LittleFS */
-    bool saveData(const char* fileName, timeStruct* time_val, SensorData* sensor_val);
+    /** @brief Save sensor data to LittleFS (with optional BLE data) */
+    bool saveData(const char* fileName, timeStruct* time_val, SensorData* sensor_val,
+                  BleSensorData* ble_val = nullptr);
 
     /** @brief Check available space */
     uint64_t getAvailableSpace();

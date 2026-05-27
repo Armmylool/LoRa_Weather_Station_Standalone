@@ -43,7 +43,8 @@ bool Memory::append(fs::FS &fs, const char * path, const char * message){
   return success;
 }
 
-bool Memory::saveData(const char* fileName, timeStruct* time_val, SensorData* sensor_val){
+bool Memory::saveData(const char* fileName, timeStruct* time_val, SensorData* sensor_val,
+                      BleSensorData* ble_val){
   if (time_val == nullptr || sensor_val == nullptr) {
     Serial.println("Null pointer passed to saveData");
     return false;
@@ -60,24 +61,26 @@ bool Memory::saveData(const char* fileName, timeStruct* time_val, SensorData* se
   }
   
   static char dataBuffer[512];
-    
-  int written = snprintf(dataBuffer, sizeof(dataBuffer), 
+
+  BleSensorData emptyBle = {0, 0, 0, 0, 0, 0, 0, 0};
+  BleSensorData* ble = ble_val ? ble_val : &emptyBle;
+
+  int written = snprintf(dataBuffer, sizeof(dataBuffer),
     "%s,%s,"
     "%.1f,%.1f,%u,%.1f,%u,%u,%u,"
-    "%.1f,%u,%.1f,%.1f,%u,%.1f,%lu,%.1f,%u\r\n",
-    
+    "%.1f,%u,%.1f,%.1f,%u,%.1f,%lu,%.1f,%u,"
+    "%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u\r\n",
+
     time_val->dateStr, time_val->timeStr,
-    
-    // Soil
+
     (double)sensor_val->soil_humi / 10.0,
     (double)sensor_val->soil_temp / 10.0,
     sensor_val->soil_ec,
     (double)sensor_val->soil_ph / 10.0,
-    sensor_val->soil_N, 
-    sensor_val->soil_P, 
+    sensor_val->soil_N,
+    sensor_val->soil_P,
     sensor_val->soil_K,
-    
-    // Weather
+
     (double)sensor_val->windSpeed / 10.0,
     sensor_val->windDir_Deg,
     (double)sensor_val->air_humidity / 10.0,
@@ -86,7 +89,16 @@ bool Memory::saveData(const char* fileName, timeStruct* time_val, SensorData* se
     (double)sensor_val->pressure / 10.0,
     sensor_val->illuminance,
     (double)sensor_val->rainfall / 10.0,
-    sensor_val->solar
+    sensor_val->solar,
+
+    (double)ble->ble_temp / 10.0,
+    (double)ble->ble_humi / 10.0,
+    (double)ble->ble_tmp117 / 10.0,
+    (double)ble->ble_delta / 10.0,
+    ble->ble_rain,
+    ble->ble_leaf,
+    ble->ble_par,
+    ble->ble_soil
   );
   
   if (written < 0 || written >= sizeof(dataBuffer)) {
@@ -237,6 +249,21 @@ bool Memory::readDataRecords(const char* fileName, DataRecord* records, int maxR
     records[index].data.illuminance = (uint32_t)parseIntNextField(line, pos);
     records[index].data.rainfall = (uint16_t)(parseNextField(line, pos) * 10.0f);
     records[index].data.solar = (uint16_t)parseIntNextField(line, pos);
+
+    /* BLE columns (optional — only present in temp file) */
+    if (pos >= 0) {
+      records[index].ble.ble_temp   = (int16_t)(parseNextField(line, pos) * 10.0f);
+      records[index].ble.ble_humi   = (uint16_t)(parseNextField(line, pos) * 10.0f);
+      records[index].ble.ble_tmp117 = (int16_t)(parseNextField(line, pos) * 10.0f);
+      records[index].ble.ble_delta  = (int16_t)(parseNextField(line, pos) * 10.0f);
+      records[index].ble.ble_rain   = (uint16_t)parseIntNextField(line, pos);
+      records[index].ble.ble_leaf   = (uint16_t)parseIntNextField(line, pos);
+      records[index].ble.ble_par    = (uint16_t)parseIntNextField(line, pos);
+      records[index].ble.ble_soil   = (uint16_t)parseIntNextField(line, pos);
+      records[index].ble_valid = 1;
+    } else {
+      records[index].ble_valid = 0;
+    }
 
     records[index].valid = 1;
     index++;

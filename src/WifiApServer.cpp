@@ -219,6 +219,8 @@ bool WifiApServer::begin(SystemStatus* status) {
     _server->on("/setap",     HTTP_POST, [this]() { hSetAp(); });
     _server->on("/setble",    HTTP_POST, [this]() { hSetBle(); });
     _server->on("/setsrc",    HTTP_POST, [this]() { hSetSources(); });
+    _server->on("/setsoil",   HTTP_POST, [this]() { hSetSoil(); });
+    _server->on("/setweath",  HTTP_POST, [this]() { hSetWeather(); });
     _server->on("/setfile",   HTTP_POST, [this]() { hSetFile(); });
     _server->on("/setinflux", HTTP_POST, [this]() { hSetInflux(); });
     _server->on("/setntp",    HTTP_POST, [this]() { hSetNtp(); });
@@ -943,13 +945,44 @@ void WifiApServer::hSettings() {
         sendSettingsChunk(c);
     }
 
+    /* ── 3b. Soil Sensor (RS485) ── */
+    {
+        uint8_t soilId = _prefs.getUChar("soilSlaveId", SOIL_SLAVE_ID);
+        String c = F("<div class='card'><h3>&#127793; Soil Sensor (RS485)</h3>"
+            "<form method='POST' action='/setsoil'>"
+            "<label>Slave ID (1-247)</label>"
+            "<input type='number' name='sid' min='1' max='247' value='"); c += soilId;
+        c += F("'>"
+            "<button class='btn btn-b' type='submit'>Save</button>"
+            "</form></div>");
+        sendSettingsChunk(c);
+    }
+
+    /* ── 3c. Weather Sensor (RS485) ── */
+    {
+        uint8_t weathId = _prefs.getUChar("weathSlaveId", WEATHER_SLAVE_ID);
+        String c = F("<div class='card'><h3>&#9925; Weather Sensor (RS485)</h3>"
+            "<form method='POST' action='/setweath'>"
+            "<label>Slave ID (1-247)</label>"
+            "<input type='number' name='wid' min='1' max='247' value='"); c += weathId;
+        c += F("'>"
+            "<button class='btn btn-b' type='submit'>Save</button>"
+            "</form></div>");
+        sendSettingsChunk(c);
+    }
+
     /* ── 4. File Intervals ── */
     {
         uint32_t dInt = _prefs.getUInt("fileInterval", 10);
-        String c = F("<div class='card'><h3>&#128196; File Intervals</h3>"
+        uint8_t pubBatch = _prefs.getUChar("pubBatchSize", PUBLISH_BATCH_SIZE);
+        String c = F("<div class='card'><h3>&#128196; File &amp; Publish</h3>"
             "<form method='POST' action='/setfile'>"
             "<label>New data file every (minutes)</label>"
-            "<input type='number' name='di' min='1' max='1440' value='"); c += dInt; c += F("'>"
+            "<input type='number' name='di' min='1' max='1440' value='"); c += dInt;
+        c += F("'>"
+            "<label>MQTT publish batch size (records)</label>"
+            "<input type='number' name='pbs' min='1' max='60' value='"); c += pubBatch;
+        c += F("'>"
             "<button class='btn btn-b' type='submit'>Save</button>"
             "</form></div>");
         sendSettingsChunk(c);
@@ -1167,11 +1200,29 @@ void WifiApServer::hSetSources() {
     redirectTo("/settings?msg=ok:Data sources saved");
 }
 
+void WifiApServer::hSetSoil() {
+    if (!checkAuth()) return;
+    int sid = _server->arg("sid").toInt();
+    if (sid >= 1 && sid <= 247) _prefs.putUChar("soilSlaveId", (uint8_t)sid);
+    appendEvent("Soil sensor updated");
+    redirectTo("/settings?msg=ok:Soil sensor saved");
+}
+
+void WifiApServer::hSetWeather() {
+    if (!checkAuth()) return;
+    int wid = _server->arg("wid").toInt();
+    if (wid >= 1 && wid <= 247) _prefs.putUChar("weathSlaveId", (uint8_t)wid);
+    appendEvent("Weather sensor updated");
+    redirectTo("/settings?msg=ok:Weather sensor saved");
+}
+
 void WifiApServer::hSetFile() {
     if (!checkAuth()) return;
     _prefs.putUInt("fileInterval", (uint32_t)_server->arg("di").toInt());
-    appendEvent("File intervals updated");
-    redirectTo("/settings?msg=ok:File interval saved");
+    int pbs = _server->arg("pbs").toInt();
+    if (pbs >= 1 && pbs <= 60) _prefs.putUChar("pubBatchSize", (uint8_t)pbs);
+    appendEvent("File & publish settings updated");
+    redirectTo("/settings?msg=ok:Settings saved");
 }
 
 void WifiApServer::hSetInflux() {
