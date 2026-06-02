@@ -69,15 +69,18 @@ static SystemStatus sysStatus;
 static uint8_t rtSoilSlaveId   = SOIL_SLAVE_ID;
 static uint8_t rtWeathSlaveId  = WEATHER_SLAVE_ID;
 static uint8_t rtPubBatchSize  = PUBLISH_BATCH_SIZE;
+static uint8_t rtPubMode      = 0;  /* 0=MQTT batch, 1=InfluxDB per-reading */
 
 static void loadRuntimeConfig() {
     nvs.begin("ws-cfg", true);
     rtSoilSlaveId  = nvs.getUChar("soilSlaveId",  SOIL_SLAVE_ID);
     rtWeathSlaveId = nvs.getUChar("weathSlaveId", WEATHER_SLAVE_ID);
     rtPubBatchSize = nvs.getUChar("pubBatchSize", PUBLISH_BATCH_SIZE);
+    rtPubMode      = nvs.getUChar("pubMode",      0);
     nvs.end();
     if (rtPubBatchSize < 1)  rtPubBatchSize = 1;
     if (rtPubBatchSize > 60) rtPubBatchSize = 60;
+    if (rtPubMode > 1)       rtPubMode = 0;
 }
 
 /* ===== FORWARD DECLARATIONS ===== */
@@ -87,6 +90,14 @@ void feedWDT();
 void clearWeatherData();
 bool publishHeartbeat();
 bool publishRealData();
+
+static void pulseDoneTPL5110() {
+    for (int i = 0; i < 5; i++) {
+        digitalWrite(PIN_DONE, LOW);  delay(100);
+        digitalWrite(PIN_DONE, HIGH); delay(3000);
+        delay(500);
+    }
+}
 String getLastDataLine(const char* fileName);
 bool buildCompactJSON(DataRecord* records, int count, uint16_t battVoltage, int gsmRssi,
                        char* buffer, size_t bufferSize);
@@ -767,6 +778,19 @@ void setup() {
     GSM_SERIAL.begin(SERIAL_GSM, SERIAL_8N1, GSM_RX_PIN, GSM_TX_PIN);
     Serial.println(F("[SERIAL] GSM UART0 started"));
 
+    batteryVoltage = batteryRead();
+    Serial.printf("[BATT] %u mV\n", batteryVoltage);
+
+    if (batteryVoltage > 0 && batteryVoltage < 3200) {
+        Serial.println(F("[BATT] Low battery! Cutting power via TPL5110"));
+        Serial.flush();
+        delay(1000);
+        pulseDoneTPL5110();
+        Serial.println(F("[WARN] TPL5110 did not cut power"));
+        Serial.flush();
+        while (1) { feedWDT(); delay(1000); }
+    }
+
     feedWDT();
     if (!LittleFS.begin(true)) Serial.println(F("[FS] LittleFS FAILED"));
     else Serial.println(F("[FS] LittleFS mounted"));
@@ -774,7 +798,7 @@ void setup() {
     feedWDT();
     if (!LittleFS.exists(temporarydata)) {
         internalMemory.write(LittleFS, temporarydata,
-            "Date,Time,"
+            "Date,Time,"    
             "Soil_Humidity,Soil_Temperature,EC,PH,N,P,K,"
             "WindSpeed,WindDirection,Air_Humidity,Air_Temperature,"
             "CO2,Pressure,Illuminance,Rainfall,Solar,"
@@ -840,8 +864,6 @@ void setup() {
     strncpy(sysStatus.lastOtaStr, lastOta.c_str(), sizeof(sysStatus.lastOtaStr) - 1);
     sysStatus.lastOtaStr[sizeof(sysStatus.lastOtaStr) - 1] = '\0';
 
-    batteryVoltage = batteryRead();
-    Serial.printf("[BATT] %u mV\n", batteryVoltage);
     Serial.println(F("===== SETUP COMPLETE ====="));
 }
 
@@ -1128,7 +1150,7 @@ void loop() {
             else
                 Serial.println(F("[SAVE] Temp save FAILED"));
 
-            if (gsmAvailable) sendToInfluxDB(&currentTime, &modbusSensor.currentSensor);
+            if (gsmAvailable && rtPubMode == 1) sendToInfluxDB(&currentTime, &modbusSensor.currentSensor);
 
             currentState = STATE_RECONNECT;
             break;
@@ -1136,6 +1158,10 @@ void loop() {
 
         /* ── RECONNECT ── */
         case STATE_RECONNECT: {
+            if (rtPubMode != 0) {
+                currentState = STATE_FINISH;
+                break;
+            }
             int recordCount = internalMemory.countDataLines(temporarydata);
             if (recordCount < rtPubBatchSize) {
                 Serial.printf("[RECONNECT] %d records (< %d). Skip publish.\n",
@@ -1184,6 +1210,10 @@ void loop() {
 
         /* ── PUBLISH ── */
         case STATE_PUBLISH: {
+            if (rtPubMode != 0) {
+                currentState = STATE_FINISH;
+                break;
+            }
             int recordCount = internalMemory.countDataLines(temporarydata);
             Serial.printf("[PUBLISH] Temp records: %d\n", recordCount);
 
@@ -1207,8 +1237,7 @@ void loop() {
             Serial.println(F("[DONE] Pulsing TPL5110"));
             delay(3000);
             Serial.flush();
-            digitalWrite(PIN_DONE, LOW); delay(50);
-            digitalWrite(PIN_DONE, HIGH); delay(2000);
+            pulseDoneTPL5110();
             Serial.println(F("[WARN] TPL5110 did not cut power"));
             Serial.flush();
             while (1) { feedWDT(); delay(1000); }
@@ -1221,7 +1250,7 @@ void loop() {
 
 /* ===== BATCH MQTT PUBLISH (auto-chunks to fit SIM800L 1024-byte limit) ===== */
 
-static constexpr size_t MQTT_MAX_PAYLOAD = 1450;
+static constexpr size_t MQTT_MAX_PAYLOAD = 950;   /* SIM800L ~1024-byte TCP limit minus MQTT header overhead */
 
 bool publishRealData() {
     int recordCount = internalMemory.countDataLines(temporarydata);
@@ -1289,7 +1318,6 @@ bool publishRealData() {
         feedWDT();
         delay(200);
     }
-
     /* Remove all successfully published records from temp file */
     if (published > 0) {
         internalMemory.removeFirstDataLines(temporarydata, published);

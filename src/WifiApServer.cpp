@@ -975,16 +975,40 @@ void WifiApServer::hSettings() {
     {
         uint32_t dInt = _prefs.getUInt("fileInterval", 10);
         uint8_t pubBatch = _prefs.getUChar("pubBatchSize", PUBLISH_BATCH_SIZE);
+        uint8_t pubMode = _prefs.getUChar("pubMode", 0);
         String c = F("<div class='card'><h3>&#128196; File &amp; Publish</h3>"
             "<form method='POST' action='/setfile'>"
+            "<label>Publish Mode</label>"
+            "<div style='margin-bottom:12px'>"
+            "<label style='display:flex;align-items:center;gap:8px;font-weight:normal;margin-bottom:6px'>"
+            "<input type='radio' name='pm' value='0'");
+        if (pubMode == 0) c += F(" checked");
+        c += F("> MQTT Batch Publish</label>"
+            "<label style='display:flex;align-items:center;gap:8px;font-weight:normal'>"
+            "<input type='radio' name='pm' value='1'");
+        if (pubMode == 1) c += F(" checked");
+        c += F("> InfluxDB Per-Reading</label>"
+            "</div>"
             "<label>New data file every (minutes)</label>"
             "<input type='number' name='di' min='1' max='1440' value='"); c += dInt;
         c += F("'>"
+            "<div id='batch-row'");
+        if (pubMode != 0) c += F(" style='display:none'");
+        c += F(">"
             "<label>MQTT publish batch size (records)</label>"
             "<input type='number' name='pbs' min='1' max='60' value='"); c += pubBatch;
         c += F("'>"
+            "</div>"
             "<button class='btn btn-b' type='submit'>Save</button>"
-            "</form></div>");
+            "</form>"
+            "<script>"
+            "(function(){"
+            "var r=document.querySelectorAll('input[name=pm]');"
+            "function u(){document.getElementById('batch-row').style.display=r[0].checked?'':'none';}"
+            "r.forEach(function(x){x.addEventListener('change',u);});u();"
+            "})();"
+            "</script>"
+            "</div>");
         sendSettingsChunk(c);
     }
 
@@ -1219,6 +1243,8 @@ void WifiApServer::hSetWeather() {
 void WifiApServer::hSetFile() {
     if (!checkAuth()) return;
     _prefs.putUInt("fileInterval", (uint32_t)_server->arg("di").toInt());
+    int pm = _server->arg("pm").toInt();
+    if (pm == 0 || pm == 1) _prefs.putUChar("pubMode", (uint8_t)pm);
     int pbs = _server->arg("pbs").toInt();
     if (pbs >= 1 && pbs <= 60) _prefs.putUChar("pubBatchSize", (uint8_t)pbs);
     appendEvent("File & publish settings updated");

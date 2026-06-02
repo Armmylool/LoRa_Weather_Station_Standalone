@@ -103,8 +103,8 @@ static constexpr int WDT_TIMEOUT_SEC = 45;
 
 /* ===== STATE TIMEOUTS ===== */
 static constexpr unsigned long SOIL_TIMEOUT         = 30000;
-static constexpr unsigned long SOIL_SETTLE_DELAY    = 15000;
-static constexpr unsigned long WEATHER_SETTLE_DELAY = 15000;
+static constexpr unsigned long SOIL_SETTLE_DELAY    = 15000;  //15000
+static constexpr unsigned long WEATHER_SETTLE_DELAY = 15000;  //15000
 static constexpr unsigned long WEATHER_TIMEOUT      = 30000;
 static constexpr unsigned long RECONNECT_TIMEOUT    = 120000;
 
