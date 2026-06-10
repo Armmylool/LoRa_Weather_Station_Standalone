@@ -3,6 +3,7 @@
 
 #include "utilities.h"
 #include "sensor_v2.h"
+#include "LoRaPacket.h"
 
 class LoRaE32Handler {
 public:
@@ -17,15 +18,19 @@ public:
     void sleep();   /* no-op without M0/M1 pins */
     void wakeup();  /* no-op without M0/M1 pins */
 
+#ifdef LORA_USE_ACK
     void flushInput();
     bool waitAck(LoRaAckPacket& ack, uint16_t expectedSeq, unsigned long timeoutMs);
+#endif
 
 private:
     HardwareSerial* _serial;
     bool     _initialized;
 
     void     _flush();
+#ifdef LORA_USE_ACK
     int      _readByte(unsigned long timeoutMs);
+#endif
 };
 
 #endif

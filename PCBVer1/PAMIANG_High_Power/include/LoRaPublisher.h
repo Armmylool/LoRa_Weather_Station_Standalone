@@ -1,4 +1,4 @@
-/* LoRa data publishing — reads temp CSV, packs binary structs, sends via E32.
+/* LoRa data publishing - reads temp CSV, packs binary structs, sends via E32.
  * Extracted from main.cpp. */
 #ifndef LORA_PUBLISHER_H_
 #define LORA_PUBLISHER_H_
@@ -28,14 +28,17 @@ public:
     void begin(LoRaPublisherCtx* ctx);
 
     /* Read temp CSV records, pack into LoRaDataPacket structs, send via E32.
-     * Waits for ACK from RX board after each packet with retries. */
+     * When LORA_USE_ACK is defined: waits for ACK from RX with retries.
+     * Without LORA_USE_ACK: fire-and-forget. */
     bool publishData();
 
     /* Send a small heartbeat struct via E32. */
     bool publishHeartbeat();
 
+#ifdef LORA_USE_ACK
     /* Send an ACK packet for the given sequence number. */
     bool sendAck(uint16_t seq);
+#endif
 
 private:
     LoRaPublisherCtx* _ctx;

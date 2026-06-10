@@ -1,4 +1,4 @@
-/* LoRa data publishing — extracted from main.cpp */
+/* LoRa data publishing - extracted from main.cpp */
 #include "LoRaPublisher.h"
 #include "utilities.h"
 #include "TxUtilities.h"
@@ -12,7 +12,9 @@ void LoRaPublisher::begin(LoRaPublisherCtx* ctx) {
     _ctx = ctx;
 }
 
-/* ── Send ACK packet via LoRa ── */
+#ifdef LORA_USE_ACK
+
+/* -- Send ACK packet via LoRa -- */
 bool LoRaPublisher::sendAck(uint16_t seq) {
     LoRaAckPacket ack;
     ack.magic = LORA_MAGIC;
@@ -28,7 +30,7 @@ bool LoRaPublisher::sendAck(uint16_t seq) {
     return ok;
 }
 
-/* ── Publish data records via LoRa with ACK ── */
+/* -- Publish data records via LoRa with ACK -- */
 bool LoRaPublisher::publishData() {
     int recordCount = _ctx->memory->countDataLines(_ctx->tempDataPath);
     Serial.printf("[LoRa] %d records in temp file\n", recordCount);
@@ -43,7 +45,7 @@ bool LoRaPublisher::publishData() {
         if (_ctx->loraHandler->init(*_ctx->loraSerial)) {
             *_ctx->loraAvailable = true;
         } else {
-            Serial.println(F("[LoRa] Init failed — cannot publish"));
+            Serial.println(F("[LoRa] Init failed - cannot publish"));
             return false;
         }
     }
@@ -137,7 +139,92 @@ bool LoRaPublisher::publishData() {
     return (published > 0);
 }
 
-/* ── Publish heartbeat via LoRa ── */
+#else /* !LORA_USE_ACK - fire-and-forget */
+
+/* -- Publish data records via LoRa (no ACK) -- */
+bool LoRaPublisher::publishData() {
+    int recordCount = _ctx->memory->countDataLines(_ctx->tempDataPath);
+    Serial.printf("[LoRa] %d records in temp file\n", recordCount);
+
+    if (recordCount <= 0) {
+        Serial.println(F("[LoRa] No records to publish."));
+        return false;
+    }
+
+    if (!*_ctx->loraAvailable) {
+        Serial.println(F("[LoRa] Re-initializing..."));
+        if (_ctx->loraHandler->init(*_ctx->loraSerial)) {
+            *_ctx->loraAvailable = true;
+        } else {
+            Serial.println(F("[LoRa] Init failed - cannot publish"));
+            return false;
+        }
+    }
+
+    int maxRecords = PUBLISH_MAX_RECORDS;
+    if (_ctx->publishBatchSize && *_ctx->publishBatchSize > 0) {
+        maxRecords = min(maxRecords, (int)*_ctx->publishBatchSize);
+    }
+    int toPublish = (recordCount > maxRecords) ? maxRecords : recordCount;
+
+    DataRecord records[PUBLISH_MAX_RECORDS];
+    memset(records, 0, sizeof(records));
+    if (!_ctx->memory->readDataRecords(_ctx->tempDataPath, records, toPublish)) {
+        Serial.println(F("[LoRa] Failed to read temp records"));
+        return false;
+    }
+
+    int published = 0;
+    for (int i = 0; i < toPublish; i++) {
+        if (records[i].valid != 1) continue;
+
+        LoRaDataPacket pkt;
+        memset(&pkt, 0, sizeof(pkt));
+
+        pkt.hdr.magic = LORA_MAGIC;
+        pkt.hdr.type  = LORA_PKT_DATA;
+        pkt.hdr.seq   = _sequence++;
+        pkt.hdr.vt    = *_ctx->batteryVoltage;
+
+        pkt.date   = records[i].date;
+        pkt.month  = records[i].month;
+        pkt.year   = records[i].year;
+        pkt.hour   = records[i].hour;
+        pkt.minute = records[i].minute;
+
+        pkt.sensor = records[i].data;
+
+        pkt.ble_valid = records[i].ble_valid;
+        if (pkt.ble_valid)
+            pkt.ble = records[i].ble;
+
+        Serial.printf("[LoRa] Sending record %d/%d (%u bytes)\n",
+                      i + 1, toPublish, sizeof(pkt));
+
+        bool ok = _ctx->loraHandler->send((const uint8_t*)&pkt, sizeof(pkt));
+        if (!ok) {
+            Serial.printf("[LoRa] Send failed at record %d. Stopping.\n", i + 1);
+            break;
+        }
+        published++;
+        esp_task_wdt_reset();
+        delay(500);
+    }
+
+    if (published > 0) {
+        Serial.printf("[LoRa] Removing %d lines from CSV...\n", published);
+        Serial.flush();
+        _ctx->memory->removeFirstDataLines(_ctx->tempDataPath, published);
+        Serial.printf("[LoRa] Published %d/%d record(s)\n", published, toPublish);
+        Serial.flush();
+    }
+
+    return (published > 0);
+}
+
+#endif /* LORA_USE_ACK */
+
+/* -- Publish heartbeat via LoRa -- */
 bool LoRaPublisher::publishHeartbeat() {
     if (!*_ctx->loraAvailable) return false;
 

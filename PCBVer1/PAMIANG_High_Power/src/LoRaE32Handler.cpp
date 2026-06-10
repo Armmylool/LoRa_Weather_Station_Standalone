@@ -18,7 +18,7 @@ bool LoRaE32Handler::init(HardwareSerial& serial) {
     _serial = &serial;
     _flush();
 
-    /* No M0/M1/AUX pins — transparent serial mode only.
+    /* No M0/M1/AUX pins - transparent serial mode only.
        Assume module is pre-configured and already in normal mode. */
     Serial.println(F("[LoRa] E32 serial initialised (transparent mode, no mode pins)"));
     _initialized = true;
@@ -55,14 +55,16 @@ bool LoRaE32Handler::isReady() {
 }
 
 void LoRaE32Handler::sleep() {
-    /* No M0/M1 pins — cannot enter sleep mode */
-    Serial.println(F("[LoRa] sleep() ignored — no mode pins wired"));
+    /* No M0/M1 pins - cannot enter sleep mode */
+    Serial.println(F("[LoRa] sleep() ignored - no mode pins wired"));
 }
 
 void LoRaE32Handler::wakeup() {
-    /* No M0/M1 pins — nothing to do */
+    /* No M0/M1 pins - nothing to do */
     _flush();
 }
+
+#ifdef LORA_USE_ACK
 
 void LoRaE32Handler::flushInput() {
     _flush();
@@ -114,3 +116,5 @@ bool LoRaE32Handler::waitAck(LoRaAckPacket& ack, uint16_t expectedSeq, unsigned 
                   expectedSeq, timeoutMs);
     return false;
 }
+
+#endif /* LORA_USE_ACK */
