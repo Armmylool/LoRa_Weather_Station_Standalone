@@ -32,6 +32,10 @@ static constexpr unsigned long LORA_INIT_TIMEOUT_MS = 10000;
 static constexpr unsigned long LORA_TX_TIMEOUT_MS   = 15000;
 static constexpr size_t         LORA_MAX_PAYLOAD     = 512;
 
+/* ===== LORA TX REDUNDANCY ===== */
+static constexpr uint8_t        LORA_TX_REDUNDANCY   = 3;
+static constexpr unsigned long  LORA_TX_REDUND_DELAY = 500;
+
 /* ===== LORA ACK PROTOCOL ===== */
 static constexpr unsigned long LORA_ACK_TIMEOUT_MS  = 2000;
 static constexpr uint8_t       LORA_ACK_MAX_RETRIES = 3;
@@ -67,11 +71,11 @@ const uint8_t TIME_INCREMENT_MINUTES = 10;
 #define WIFI_AP_CHANNEL  1
 
 /* WiFi AP timing */
-static constexpr unsigned long WIFI_AP_TIMEOUT               = 60000UL; /* AP/webserver state window: 30 minutes */
-static constexpr unsigned long WIFI_AP_DEFAULT_IDLE_MIN      = 2;         /* Default idle timeout (minutes) */
-static constexpr unsigned long BLE_RETRY_FAILED_SCAN_MS      = 60000UL;   /* Scan this long after BLE connect retries fail */
-static constexpr unsigned long BLE_RETRY_SCAN_INTERVAL_MS    = 10000UL;   /* Scan interval during retry-failed fallback */
-static constexpr uint8_t       BLE_CONNECT_TIMEOUT_SEC       = 5;         /* NimBLE connect timeout per attempt */
+static constexpr unsigned long WIFI_AP_TIMEOUT               = 60000UL;
+static constexpr unsigned long WIFI_AP_DEFAULT_IDLE_MIN      = 2;
+static constexpr unsigned long BLE_RETRY_FAILED_SCAN_MS      = 60000UL;
+static constexpr unsigned long BLE_RETRY_SCAN_INTERVAL_MS    = 10000UL;
+static constexpr uint8_t       BLE_CONNECT_TIMEOUT_SEC       = 5;
 
 /* ===== WEB PORTAL AUTH ===== */
 #define WEB_DEFAULT_USER "admin"

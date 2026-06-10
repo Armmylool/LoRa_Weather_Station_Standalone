@@ -139,9 +139,9 @@ bool LoRaPublisher::publishData() {
     return (published > 0);
 }
 
-#else /* !LORA_USE_ACK - fire-and-forget */
+#else /* !LORA_USE_ACK - fire-and-forget with redundancy */
 
-/* -- Publish data records via LoRa (no ACK) -- */
+/* -- Publish data records via LoRa (no ACK, send each packet LORA_TX_REDUNDANCY times) -- */
 bool LoRaPublisher::publishData() {
     int recordCount = _ctx->memory->countDataLines(_ctx->tempDataPath);
     Serial.printf("[LoRa] %d records in temp file\n", recordCount);
@@ -198,16 +198,29 @@ bool LoRaPublisher::publishData() {
         if (pkt.ble_valid)
             pkt.ble = records[i].ble;
 
-        Serial.printf("[LoRa] Sending record %d/%d (%u bytes)\n",
-                      i + 1, toPublish, sizeof(pkt));
+        bool sendOk = false;
+        for (uint8_t tx = 0; tx < LORA_TX_REDUNDANCY; tx++) {
+            Serial.printf("[LoRa] Sending record %d/%d tx=%u/%u (%u bytes)\n",
+                          i + 1, toPublish, tx + 1, LORA_TX_REDUNDANCY, sizeof(pkt));
 
-        bool ok = _ctx->loraHandler->send((const uint8_t*)&pkt, sizeof(pkt));
-        if (!ok) {
-            Serial.printf("[LoRa] Send failed at record %d. Stopping.\n", i + 1);
+            bool ok = _ctx->loraHandler->send((const uint8_t*)&pkt, sizeof(pkt));
+            if (ok) {
+                sendOk = true;
+            } else {
+                Serial.printf("[LoRa] Send failed at record %d tx %u.\n", i + 1, tx + 1);
+            }
+            esp_task_wdt_reset();
+            if (tx < LORA_TX_REDUNDANCY - 1) {
+                delay(LORA_TX_REDUND_DELAY);
+            }
+        }
+
+        if (!sendOk) {
+            Serial.printf("[LoRa] All %u TX attempts failed for record %d. Stopping.\n",
+                          LORA_TX_REDUNDANCY, i + 1);
             break;
         }
         published++;
-        esp_task_wdt_reset();
         delay(500);
     }
 
@@ -215,7 +228,8 @@ bool LoRaPublisher::publishData() {
         Serial.printf("[LoRa] Removing %d lines from CSV...\n", published);
         Serial.flush();
         _ctx->memory->removeFirstDataLines(_ctx->tempDataPath, published);
-        Serial.printf("[LoRa] Published %d/%d record(s)\n", published, toPublish);
+        Serial.printf("[LoRa] Published %d/%d record(s) x%u each\n",
+                      published, toPublish, LORA_TX_REDUNDANCY);
         Serial.flush();
     }
 
